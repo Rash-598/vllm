@@ -1563,6 +1563,7 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
                             is_encoder_decoder))
                     # Disable KV Scale Calculation for graph capture
                     attn_metadata.enable_kv_scales_calculation = False
+                    attn_metadata.use_vmm = self.use_vmm
                     if self.lora_config:
                         lora_mapping = LoRAMapping(
                             **dict(index_mapping=[0] * batch_size,

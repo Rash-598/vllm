@@ -64,7 +64,7 @@ class CacheEngine:
         logger.info(f"Before Free GPU memory: {torch.cuda.mem_get_info()}")
         self.gpu_cache = self._allocate_kv_cache(
             self.num_gpu_blocks, self.device_config.device_type)
-        logger.info(f"Regular Shape of GPU cache: {len(self.gpu_cache)}, {self.gpu_cache[0].shape} align cache {self.align_cache}")
+        logger.info(f"Regular Shape of GPU cache: {len(self.gpu_cache)}, {self.gpu_cache[0].shape}")
         logger.info(f"After Free GPU memory: {torch.cuda.mem_get_info()}")
         self.cpu_cache = self._allocate_kv_cache(self.num_cpu_blocks, "cpu")
 

@@ -305,6 +305,14 @@ class CommonAttentionState(AttentionState):
                                           device=self.runner.device)
         self._graph_block_tables = torch.from_numpy(
             self.runner.graph_block_tables).to(device=self.runner.device)
+        
+        self._graph_cache_cow_mapping = torch.full(
+            (max_batch_size, ), 0, dtype=torch.int32,
+            device=self.runner.device)
+        
+        self._graph_cache_col_mapping = torch.full(
+            (max_batch_size, ), 0, dtype=torch.int32,
+            device=self.runner.device)
 
         yield
 
@@ -312,6 +320,8 @@ class CommonAttentionState(AttentionState):
         del self._graph_slot_mapping
         del self._graph_seq_lens
         del self._graph_block_tables
+        del self._graph_cache_cow_mapping
+        del self._graph_cache_col_mapping
 
     def graph_clone(self, batch_size: int) -> "CommonAttentionState":
         assert self._is_graph_capturing
@@ -325,6 +335,8 @@ class CommonAttentionState(AttentionState):
             num_prefill_tokens=0,
             num_decode_tokens=batch_size,
             slot_mapping=self._graph_slot_mapping[:batch_size],
+            cache_cow_mapping=self._graph_cache_cow_mapping[:batch_size],
+            cache_col_mapping=self._graph_cache_col_mapping[:batch_size],
             multi_modal_placeholder_index_maps=None,
             enable_kv_scales_calculation=True,
             seq_lens=None,

@@ -282,8 +282,6 @@ __global__ void reshape_and_cache_flash_kernel(
   const int64_t block_idx = slot_idx / block_size;
   const int64_t block_offset = slot_idx % block_size;
   const int n = num_heads * head_size;
-  printf("token_idx=%lld, slot_idx=%lld, block_idx=%lld, block_offset=%lld\n",
-    token_idx, slot_idx, block_idx, block_offset);
   for (int i = threadIdx.x; i < n; i += blockDim.x) {
     const int64_t src_key_idx = token_idx * key_stride + i;
     const int64_t src_value_idx = token_idx * value_stride + i;
@@ -372,8 +370,6 @@ __global__ void reshape_and_cache_vmm_kernel(
   // // NOTE: cache_cow_idx or cache_col_idx can be -1 if the token is padded
   const int64_t cache_cow_idx = cache_cow_mapping[token_idx];
   const int64_t cache_col_idx = cache_col_mapping[token_idx];
-  printf("token_idx=%lld, cache_cow_idx=%lld, cache_col_idx=%lld\n",
-    token_idx, cache_cow_idx, cache_col_idx);
   if (cache_cow_idx < 0 || cache_col_idx < 0) {
     return;
   }
@@ -387,14 +383,12 @@ __global__ void reshape_and_cache_vmm_kernel(
                              cache_col_idx * cache_token_stride + i);
     
     if (src_key_idx < 0 || src_value_idx < 0 || tgt_idx < 0) {
-    printf("[ERROR] Invalid index! src_key_idx: %ld, src_value_idx: %ld, tgt_idx: %ld\n",
+      printf("[ERROR] Invalid index! src_key_idx: %ld, src_value_idx: %ld, tgt_idx: %ld\n",
             src_key_idx, src_value_idx, tgt_idx);
+    }
 
     k_cache[tgt_idx] = key[src_key_idx];
     v_cache[tgt_idx] = value[src_value_idx];
-
-    printf("Thread %d copying key[%ld] -> k_cache[%ld], value[%ld] -> v_cache[%ld]\n",
-      threadIdx.x, src_key_idx, tgt_idx, src_value_idx, tgt_idx);
   }
 }
 

@@ -775,7 +775,7 @@ class FlashAttentionImpl(AttentionImpl):
         logits_soft_cap: Optional[float] = self.logits_soft_cap
         fp8_attention = kv_cache_dtype.startswith("fp8")
         use_vmm = attn_metadata.use_vmm
-        # logger.info(f"flash attn vmm: {use_vmm}")
+        logger.info(f"flash attn vmm: {use_vmm}")
         kv_cache_numel = 0
         if isinstance(kv_cache, list):
             kv_cache_numel = sum([kv_cache[i].numel() for i in range(len(kv_cache))])
@@ -806,9 +806,9 @@ class FlashAttentionImpl(AttentionImpl):
                 # not cached. This happens during the initial memory
                 # profiling run.
                 if use_vmm:
-                    logger.info(f"VMM shapes key {key.shape} value {value.shape} key_cache {key_cache.shape} value_cache {value_cache.shape}")
-                    logger.info(f"cahce cow mapping {attn_metadata.cache_cow_mapping.shape} cache col mapping {attn_metadata.cache_col_mapping.shape}")
-                    # logger.info(f"key: {key} value: {value}")
+                    # logger.info(f"VMM shapes key {key.shape} value {value.shape} key_cache {key_cache.shape} value_cache {value_cache.shape}")
+                    # logger.info(f"cahce cow mapping {attn_metadata.cache_cow_mapping.shape} cache col mapping {attn_metadata.cache_col_mapping.shape}")
+                    # # logger.info(f"key: {key} value: {value}")
                     logger.info(f"Running vmm reshape and cache")
                     num_tokens = key.size(0)
                     num_heads = key.size(1)
@@ -835,27 +835,27 @@ class FlashAttentionImpl(AttentionImpl):
                         attn_metadata.cache_col_mapping,
                         kv_cache_dtype
                     )
-                    logger.info(f"After run VMM shapes key {key.shape} value {value.shape} key_cache {key_cache.shape} value_cache {value_cache.shape}")
-                    logger.info(f"cahce cow mapping {attn_metadata.cache_cow_mapping.shape} cache col mapping {attn_metadata.cache_col_mapping.shape}")
+                    # logger.info(f"After run VMM shapes key {key.shape} value {value.shape} key_cache {key_cache.shape} value_cache {value_cache.shape}")
+                    # logger.info(f"cahce cow mapping {attn_metadata.cache_cow_mapping.shape} cache col mapping {attn_metadata.cache_col_mapping.shape}")
                 else:
                     # logger.info(f"Regular shapes key {key.shape} value {value.shape} key_cache {key_cache.shape} value_cache {value_cache.shape}, updated_slot_mapping {updated_slot_mapping.shape}")
                     # logger.info(f"key: {key} value: {value}")
-                    num_tokens = updated_slot_mapping.flatten().size(0)
-                    num_heads = key.size(1)
-                    head_size = key.size(2)
+                    # num_tokens = updated_slot_mapping.flatten().size(0)
+                    # num_heads = key.size(1)
+                    # head_size = key.size(2)
 
-                    key_stride = key.stride(0)
-                    value_stride = value.stride(0)
-                    cache_batch_stride = key_cache.stride(0)
-                    cache_token_stride = key_cache.stride(1)
-                    logger.info(f"""num_tokens {num_tokens}, num_heads {num_heads}, head_size {head_size} 
-                                key stride {key_stride} value stride {value_stride} 
-                                cache batch stride {cache_batch_stride} cache token stride {cache_token_stride},
-                                updated_slot_mapping {updated_slot_mapping.shape},
-                                key_data_ptr {key.data_ptr()} value_data_ptr {value.data_ptr()},
-                                key_cache_data_ptr {key_cache.data_ptr()} value_cache_data_ptr {value_cache.data_ptr()},
-                                updated_slot_mapping_data_ptr {updated_slot_mapping.flatten().data_ptr()}"""
-                    )
+                    # key_stride = key.stride(0)
+                    # value_stride = value.stride(0)
+                    # cache_batch_stride = key_cache.stride(0)
+                    # cache_token_stride = key_cache.stride(1)
+                    # logger.info(f"""num_tokens {num_tokens}, num_heads {num_heads}, head_size {head_size} 
+                    #             key stride {key_stride} value stride {value_stride} 
+                    #             cache batch stride {cache_batch_stride} cache token stride {cache_token_stride},
+                    #             updated_slot_mapping {updated_slot_mapping.shape},
+                    #             key_data_ptr {key.data_ptr()} value_data_ptr {value.data_ptr()},
+                    #             key_cache_data_ptr {key_cache.data_ptr()} value_cache_data_ptr {value_cache.data_ptr()},
+                    #             updated_slot_mapping_data_ptr {updated_slot_mapping.flatten().data_ptr()}"""
+                    # )
                     torch.ops._C_cache_ops.reshape_and_cache_flash(
                         key,
                         value,
