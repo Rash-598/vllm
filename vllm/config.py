@@ -37,7 +37,7 @@ from vllm.transformers_utils.config import (
     try_get_generation_config, uses_mrope)
 from vllm.transformers_utils.s3_utils import S3Model
 from vllm.transformers_utils.utils import is_s3
-from vllm.utils import (GiB_bytes, MiB_bytes, MiB_bytes, MiB_bytes, LayerBlockType, cuda_device_count_stateless,
+from vllm.utils import (GiB_bytes, MiB_bytes, LayerBlockType, cuda_device_count_stateless,
                         get_cpu_memory, random_uuid, resolve_obj_by_qualname)
 
 if TYPE_CHECKING:
