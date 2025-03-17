@@ -46,3 +46,17 @@ void gather_cache(
     torch::Tensor const& block_table,  // [BATCH, BLOCK_INDICES]
     torch::Tensor const& cu_seq_lens,  // [BATCH+1]
     int64_t batch_size, std::optional<torch::Tensor> seq_starts = std::nullopt);
+
+// new add for vmm
+void reshape_and_cache_vmm(
+    torch::Tensor& key,    // [num_tokens, num_heads, head_size]
+    torch::Tensor& value,  // [num_tokens, num_heads, head_size]
+    torch::Tensor&
+        key_cache,  // [max_batch_size, max_seq_len, num_heads, head_size]
+    torch::Tensor&
+        value_cache,  // [max_batch_size, max_seq_len, num_heads, head_size]
+    torch::Tensor& cache_cow_mapping,  // [num_tokens]  record key/value write
+                                       // to which batch cow in cache
+    torch::Tensor& cache_col_mapping,  // [num_tokens]  record key/value write
+                                       // to which token col in cache
+    const std::string& kv_cache_dtype);

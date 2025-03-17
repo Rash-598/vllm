@@ -215,6 +215,7 @@ class LLMEngine:
         input_registry: InputRegistry = INPUT_REGISTRY,
         mm_registry: MultiModalRegistry = MULTIMODAL_REGISTRY,
         use_cached_outputs: bool = False,
+        use_vmm: bool = False
     ) -> None:
         if envs.VLLM_USE_V1:
             raise ValueError(
@@ -237,7 +238,9 @@ class LLMEngine:
         self.prompt_adapter_config = vllm_config.prompt_adapter_config  # noqa
         self.observability_config = vllm_config.observability_config or ObservabilityConfig(  # noqa
         )
-
+        logger.info(
+            f"Initializing LLM engine with block size {self.cache_config.block_size} ",
+        )
         logger.info(
             "Initializing a V0 LLM engine (v%s) with config: %s, "
             "use_cached_outputs=%s, ",
@@ -248,6 +251,7 @@ class LLMEngine:
 
         self.log_stats = log_stats
         self.use_cached_outputs = use_cached_outputs
+        self.use_vmm = use_vmm
 
         if not self.model_config.skip_tokenizer_init:
             self.tokenizer = self._init_tokenizer()
@@ -307,6 +311,8 @@ class LLMEngine:
                     str(self.cache_config.cache_dtype),
 
                     # Feature flags
+                    "use_vmm":
+                    self.use_vmm,
                     "enable_lora":
                     bool(self.lora_config),
                     "enable_prompt_adapter":
@@ -492,6 +498,7 @@ class LLMEngine:
         usage_context: UsageContext = UsageContext.ENGINE_CONTEXT,
         stat_loggers: Optional[Dict[str, StatLoggerBase]] = None,
         disable_log_stats: bool = False,
+        use_vmm: bool = False,
     ) -> "LLMEngine":
         return cls(
             vllm_config=vllm_config,
@@ -499,6 +506,7 @@ class LLMEngine:
             log_stats=(not disable_log_stats),
             usage_context=usage_context,
             stat_loggers=stat_loggers,
+            use_vmm=use_vmm,
         )
 
     @classmethod
@@ -512,6 +520,7 @@ class LLMEngine:
         # Create the engine configs.
         vllm_config = engine_args.create_engine_config(usage_context)
 
+        logger.info(f"Init engine block size {vllm_config.cache_config.block_size}")
         engine_cls = cls
         if envs.VLLM_USE_V1:
             from vllm.v1.engine.llm_engine import LLMEngine as V1LLMEngine
@@ -522,6 +531,7 @@ class LLMEngine:
             usage_context=usage_context,
             stat_loggers=stat_loggers,
             disable_log_stats=engine_args.disable_log_stats,
+            use_vmm=engine_args.use_vmm,
         )
 
     def __reduce__(self):
@@ -1352,6 +1362,7 @@ class LLMEngine:
         # For llm_engine, there is no pipeline parallel support, so the engine
         # used is always 0.
         virtual_engine = 0
+        logger.info(f"LLM Engine step block size {self.cache_config.block_size}")
 
         # These are cached outputs from previous iterations. None if on first
         # iteration
@@ -1432,6 +1443,11 @@ class LLMEngine:
                     virtual_engine]
 
             try:
+                if self.use_vmm:
+                    execute_model_req.allocated_block_counts = \
+                        scheduler_outputs.allocated_block_counts
+                    execute_model_req.free_buffer_ids = \
+                        scheduler_outputs.free_buffer_ids
                 outputs = self.model_executor.execute_model(
                     execute_model_req=execute_model_req)
                 self._skip_scheduling_next_step = False

@@ -38,6 +38,10 @@ class BlockSpaceManager(ABC):
             from vllm.core.placeholder_block_space_manager import (
                 PlaceholderBlockSpaceManager)
             return PlaceholderBlockSpaceManager
+        
+        if version == "vmm":
+            from vllm.core.block_manager_vmm import BlockSpaceManagerVMM
+            return BlockSpaceManagerVMM
 
         raise ValueError(f"Unknown version {version=}")
 

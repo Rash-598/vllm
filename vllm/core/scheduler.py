@@ -155,6 +155,9 @@ class SchedulerOutputs:
     # The number of requests in the running queue
     running_queue_size: int
     preempted: int
+    # new add for vmm
+    allocated_block_counts: Dict[int, int] = field(default_factory=dict)
+    free_buffer_ids: List[int] = field(default_factory=list)
 
     def __post_init__(self):
         # Swap in and swap out should never happen at the same time.
@@ -438,11 +441,15 @@ class Scheduler:
         # simple and NOT fair. It can lead to starvation of some
         # LoRAs. This should be improved in the future.
         self.lora_config = lora_config
+        self.use_vmm = cache_config.use_vmm
 
         version = "selfattn"
         if (self.scheduler_config.runner_type == "pooling"
                 or self.cache_config.is_attention_free):
             version = "placeholder"
+       
+        if self.use_vmm:
+            version = "vmm"
 
         BlockSpaceManagerImpl = BlockSpaceManager.get_block_space_manager_class(
             version)
@@ -456,13 +463,23 @@ class Scheduler:
             num_cpu_blocks //= pipeline_parallel_size
 
         # Create the block space manager.
-        self.block_manager = BlockSpaceManagerImpl(
-            block_size=self.cache_config.block_size,
-            num_gpu_blocks=num_gpu_blocks,
-            num_cpu_blocks=num_cpu_blocks,
-            sliding_window=self.cache_config.sliding_window,
-            enable_caching=self.cache_config.enable_prefix_caching,
-        )
+        logger.info(f"Scheduler block size {self.cache_config.block_size}")
+        if cache_config.use_vmm:
+            self.block_manager = BlockSpaceManagerImpl(
+                block_size=self.cache_config.block_size,
+                num_gpu_blocks=num_gpu_blocks,
+                num_cpu_blocks=num_cpu_blocks,
+                sliding_window=self.cache_config.sliding_window,
+                enable_caching=self.cache_config.enable_prefix_caching,
+                num_cache_buffers=self.scheduler_config.max_num_seqs)
+        else:
+            self.block_manager = BlockSpaceManagerImpl(
+                block_size=self.cache_config.block_size,
+                num_gpu_blocks=num_gpu_blocks,
+                num_cpu_blocks=num_cpu_blocks,
+                sliding_window=self.cache_config.sliding_window,
+                enable_caching=self.cache_config.enable_prefix_caching,
+            )
 
         # Sequence groups in the WAITING state.
         # Contain new prefill or preempted requests.
@@ -1455,6 +1472,10 @@ class Scheduler:
     def _schedule(self) -> SchedulerOutputs:
         """Schedule queued requests."""
         if self.scheduler_config.chunked_prefill_enabled:
+            if self.use_vmm:
+                # TODO：support chunked prefill with VMM
+                raise NotImplementedError(
+                    "Chunked prefill is not supported with VMM yet.")
             return self._schedule_chunked_prefill()
         else:
             return self._schedule_default()
@@ -1501,6 +1522,10 @@ class Scheduler:
         scheduler_outputs: SchedulerOutputs = self._schedule()
         now = time.time()
 
+        if self.use_vmm:
+            scheduler_outputs.allocated_block_counts, \
+                scheduler_outputs.free_buffer_ids = self.block_manager.step()
+
         if not self.cache_config.enable_prefix_caching:
             common_computed_block_nums = []
 
@@ -1538,10 +1563,18 @@ class Scheduler:
                 cross_block_table = None
 
             for seq in seq_group.get_seqs(status=SequenceStatus.RUNNING):
+                logger.info(f"""
+                    Step 1
+                    Scheduling seq_id {seq.seq_id} with token_chunk_size {token_chunk_size} 
+                    and block_size {seq.block_size}
+                    data {seq.data}"""
+                )            
                 seq_id = seq.seq_id
                 seq_data[seq_id] = seq.data
-                block_tables[seq_id] = self.block_manager.get_block_table(seq)
-                self.block_manager.access_all_blocks_in_seq(seq, now)
+                if not self.use_vmm:
+                    block_tables[seq_id] = self.block_manager.get_block_table(
+                        seq)
+                    self.block_manager.access_all_blocks_in_seq(seq, now)
 
             if self.cache_config.enable_prefix_caching:
                 common_computed_block_nums = (
@@ -1550,6 +1583,11 @@ class Scheduler:
 
             do_sample = True
             is_prompt = seq_group.is_prefill()
+            logger.info(f"""
+                Step 2
+                Scheduling seq_group {seq_group.request_id} with token_chunk_size {token_chunk_size}
+                is_prompt {is_prompt} do_sample {do_sample}"""
+            )
             # We should send the metadata to workers when the first prefill
             # is sent. Subsequent requests could be chunked prefill or decode.
             is_first_prefill = False
@@ -1564,10 +1602,18 @@ class Scheduler:
                 # NOTE: We use get_len instead of get_prompt_len because when
                 # a sequence is preempted, prefill includes previous generated
                 # output tokens.
+                logger.info(f"""
+                    Decoding
+                    Scheduling seq_id {seqs[0].seq_id} with token_chunk_size {token_chunk_size}
+                    and num_computed_tokens {num_computed_tokens}
+                    data len {seqs[0].data.get_len()}"""
+                )
                 if (token_chunk_size + num_computed_tokens
                         < seqs[0].data.get_len()):
                     do_sample = False
 
+            logger.info(f"""
+                    Block tables {block_tables}""")
             # It assumes the scheduled_seq_groups is ordered by
             # prefill < decoding.
             if is_first_prefill or not self.scheduler_config.send_delta_data:

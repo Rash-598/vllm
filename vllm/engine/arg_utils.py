@@ -11,6 +11,7 @@ from typing import (TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Optional,
 import torch
 
 import vllm.envs as envs
+import math
 from vllm import version
 from vllm.config import (CacheConfig, CompilationConfig, ConfigFormat,
                          DecodingConfig, DeviceConfig, HfOverrides,
@@ -27,6 +28,9 @@ from vllm.test_utils import MODEL_WEIGHTS_S3_BUCKET, MODELS_ON_S3
 from vllm.transformers_utils.utils import check_gguf_file
 from vllm.usage.usage_lib import UsageContext
 from vllm.utils import FlexibleArgumentParser, StoreBoolean
+from vllm.logger import init_logger
+from vllm.utils import (MiB_bytes, STR_DTYPE_TO_TORCH_DTYPE, FlexibleArgumentParser,
+                        get_dtype_size)
 
 if TYPE_CHECKING:
     from vllm.transformers_utils.tokenizer_group import BaseTokenizerGroup
@@ -117,7 +121,11 @@ class EngineArgs:
     tensor_parallel_size: int = 1
     enable_expert_parallel: bool = False
     max_parallel_loading_workers: Optional[int] = None
-    block_size: Optional[int] = None
+    block_size: Optional[int] = 16
+    # new add for vmm
+    block_bytes_size: Optional[int] = 2 * MiB_bytes
+    use_vmm: Optional[bool] = True
+
     enable_prefix_caching: Optional[bool] = None
     disable_sliding_window: bool = False
     use_v2_block_manager: bool = True
@@ -461,6 +469,19 @@ class EngineArgs:
                             'set to ``--max-model-len``. On CUDA devices, '
                             'only block sizes up to 32 are supported. '
                             'On HPU devices, block size defaults to 128.')
+        
+        parser.add_argument(
+            '--block-bytes-size',
+            type=int,
+            default=EngineArgs.block_bytes_size,
+            choices=[2 * MiB_bytes],
+            help='Token block size for vmm')
+        
+        parser.add_argument(
+            '--use-vmm',
+            action="store_true",
+            default=EngineArgs.use_vmm,
+            help='Use vmm for kv cache. ')
 
         parser.add_argument(
             "--enable-prefix-caching",
@@ -1228,18 +1249,6 @@ class EngineArgs:
         else:
             self._set_default_args_v0(model_config)
 
-        cache_config = CacheConfig(
-            block_size=self.block_size,
-            gpu_memory_utilization=self.gpu_memory_utilization,
-            swap_space=self.swap_space,
-            cache_dtype=self.kv_cache_dtype,
-            is_attention_free=model_config.is_attention_free,
-            num_gpu_blocks_override=self.num_gpu_blocks_override,
-            sliding_window=model_config.get_sliding_window(),
-            enable_prefix_caching=self.enable_prefix_caching,
-            cpu_offload_gb=self.cpu_offload_gb,
-            calculate_kv_scales=self.calculate_kv_scales,
-        )
         parallel_config = ParallelConfig(
             pipeline_parallel_size=self.pipeline_parallel_size,
             tensor_parallel_size=self.tensor_parallel_size,
@@ -1256,6 +1265,102 @@ class EngineArgs:
             worker_cls=self.worker_cls,
             worker_extension_cls=self.worker_extension_cls,
         )
+        # if use_vmm, we need to calculate the block size
+        if self.use_vmm:
+            if self.kv_cache_dtype == "auto":
+                dtype = model_config.dtype
+            else:
+                dtype = STR_DTYPE_TO_TORCH_DTYPE[self.kv_cache_dtype]
+            dtype_size = get_dtype_size(dtype)
+
+            head_size = model_config.get_head_size()
+            num_heads = model_config.get_num_kv_heads(parallel_config)
+            num_layers = model_config.get_num_layers(parallel_config)
+
+            single_token_bytes_size = head_size * num_heads * dtype_size
+            logger.info(f"head size: {head_size}, num_heads: {num_heads}, dtype_size: {dtype_size}")
+            logger.info("single token bytes size: %d",
+                        single_token_bytes_size)
+            logger.info("num_layers: %d", num_layers)
+            logger.info(f"block bytes size: {self.block_bytes_size}")
+            # We can divide a block equally among all layers, which reduces
+            # the number of vmm memory operations.
+            single_token_bytes_size *= num_layers
+            logger.info("single token bytes size * num_layers: %d",
+                        single_token_bytes_size)
+            # vmm only support flash-attn now, which need block_size % 16 == 0
+            min_block_size = single_token_bytes_size * 16
+            self.block_bytes_size = math.lcm(  # type: ignore[attr-defined]
+                self.block_bytes_size, min_block_size)
+            logger.info("block bytes size: %d", self.block_bytes_size)
+            self.block_size = self.block_bytes_size // single_token_bytes_size
+
+            logger.info("use vmm %dMB block size: %d",
+                        self.block_bytes_size // MiB_bytes, self.block_size)
+
+            # TODO: support swap preemption mode for vmm
+            self.preemption_mode = "recompute"
+            logger.warning("Preemption only support recompute for vmm now.")
+        else:
+            logger.info(f"use normal block size: {self.block_size}", )
+
+        cache_config = CacheConfig(
+            block_size=self.block_size,
+            gpu_memory_utilization=self.gpu_memory_utilization,
+            swap_space=self.swap_space,
+            cache_dtype=self.kv_cache_dtype,
+            is_attention_free=model_config.is_attention_free,
+            num_gpu_blocks_override=self.num_gpu_blocks_override,
+            sliding_window=model_config.get_sliding_window(),
+            enable_prefix_caching=self.enable_prefix_caching,
+            cpu_offload_gb=self.cpu_offload_gb,
+            use_vmm=self.use_vmm,
+            calculate_kv_scales=self.calculate_kv_scales,
+        )
+        logger.info(f"Engine cache block size {cache_config.block_size} ")
+        max_model_len = model_config.max_model_len
+        use_long_context = max_model_len > 32768
+        if self.enable_chunked_prefill is None:
+            # If not explicitly set, enable chunked prefill by default for
+            # long context (> 32K) models. This is to avoid OOM errors in the
+            # initial memory profiling phase.
+
+            # For multimodal models and models with MLA, chunked prefill is
+            # disabled by default in V0, but enabled by design in V1
+            if model_config.is_multimodal_model or model_config.use_mla:
+                self.enable_chunked_prefill = bool(envs.VLLM_USE_V1)
+
+            elif use_long_context:
+                is_gpu = device_config.device_type == "cuda"
+                use_sliding_window = (model_config.get_sliding_window()
+                                      is not None)
+                use_spec_decode = self.speculative_model is not None
+                from vllm.platforms import current_platform
+                if (is_gpu and not use_sliding_window and not use_spec_decode
+                        and not self.enable_lora
+                        and not self.enable_prompt_adapter
+                        and model_config.runner_type != "pooling"
+                        and not current_platform.is_rocm()):
+                    self.enable_chunked_prefill = True
+                    logger.warning(
+                        "Chunked prefill is enabled by default for models with "
+                        "max_model_len > 32K. Currently, chunked prefill might "
+                        "not work with some features or models. If you "
+                        "encounter any issues, please disable chunked prefill "
+                        "by setting --enable-chunked-prefill=False.")
+            if self.enable_chunked_prefill is None:
+                self.enable_chunked_prefill = False
+
+        if not self.enable_chunked_prefill and use_long_context:
+            logger.warning(
+                "The model has a long context length (%s). This may cause OOM "
+                "errors during the initial memory profiling phase, or result "
+                "in low performance due to small KV cache space. Consider "
+                "setting --max-model-len to a smaller value.", max_model_len)
+        elif (self.enable_chunked_prefill
+              and model_config.runner_type == "pooling"):
+            msg = "Chunked prefill is not supported for pooling models"
+            raise ValueError(msg)
 
         speculative_config = SpeculativeConfig.maybe_create_spec_config(
             target_model_config=model_config,
@@ -1381,7 +1486,7 @@ class EngineArgs:
             collect_model_execute_time="worker" in detailed_trace_modules
             or "all" in detailed_trace_modules,
         )
-
+        logger.info(f"Engine before vllm cache block size {cache_config.block_size} ")
         config = VllmConfig(
             model_config=model_config,
             cache_config=cache_config,
@@ -1398,7 +1503,9 @@ class EngineArgs:
             kv_transfer_config=self.kv_transfer_config,
             additional_config=self.additional_config,
         )
-
+        logger.info(f"engine vllm block size: {cache_config.block_size} ")
+        if envs.VLLM_USE_V1:
+            self._override_v1_engine_config(config)
         return config
 
     def _is_v1_supported_oracle(self, model_config: ModelConfig) -> bool:

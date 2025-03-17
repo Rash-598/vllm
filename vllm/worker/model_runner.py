@@ -192,6 +192,7 @@ class ModelInputForGPUBuilder(ModelRunnerInputBuilderBase[ModelInputForGPU]):
         """Intermediate data for the current sequence group."""
 
         def simple_reinit(self):
+            # logger.info(f"Simple reinit, input tokens shape {len(self.input_tokens)}x{len(self.input_tokens[0])}")
             self.input_tokens[0].clear()  # type: ignore
             self.input_positions[0].clear()  # type: ignore
             self.token_types[0].clear()  # type: ignore
@@ -206,6 +207,9 @@ class ModelInputForGPUBuilder(ModelRunnerInputBuilderBase[ModelInputForGPU]):
             self.lora_requests.clear()  # type: ignore
             self.prompt_adapter_index_mapping.clear()  # type: ignore
             self.prompt_adapter_prompt_mapping.clear()  # type: ignore
+            self.cache_batch_idx.clear()  # type: ignore
+            self.cache_cow_mapping.clear()  # type: ignore
+            self.cache_col_mapping.clear()  # type: ignore
 
         def __init__(
             self,
@@ -235,6 +239,11 @@ class ModelInputForGPUBuilder(ModelRunnerInputBuilderBase[ModelInputForGPU]):
             context_lens: Optional[List[int]] = None,
             # The current sliding window block.
             curr_sliding_window_blocks: Optional[List[int]] = None,
+
+            # For vmm
+            cache_batch_idx: Optional[List[int]] = None,
+            cache_cow_mapping: Optional[List[int]] = None,
+            cache_col_mapping: Optional[List[int]] = None,
 
             # LoRA inputs.
             lora_index_mapping: Optional[List[List[int]]] = None,
@@ -352,6 +361,21 @@ class ModelInputForGPUBuilder(ModelRunnerInputBuilderBase[ModelInputForGPU]):
                             prompt_adapter_prompt_mapping
                     else:
                         self.prompt_adapter_prompt_mapping.clear()
+                    
+                    # for vmm
+                    if cache_batch_idx:
+                        self.cache_batch_idx = cache_batch_idx
+                    else:
+                        self.cache_batch_idx.clear()
+                    if cache_cow_mapping:
+                        self.cache_cow_mapping = cache_cow_mapping
+                    else:
+                        self.cache_cow_mapping.clear()
+                    if cache_col_mapping:
+                        self.cache_col_mapping = cache_col_mapping
+                    else:
+                        self.cache_col_mapping.clear()
+                    
 
             else:
                 self.input_tokens = input_tokens or []
@@ -373,6 +397,10 @@ class ModelInputForGPUBuilder(ModelRunnerInputBuilderBase[ModelInputForGPU]):
                     prompt_adapter_index_mapping or [])
                 self.prompt_adapter_prompt_mapping = (
                     prompt_adapter_prompt_mapping or [])
+
+                self.cache_batch_idx = cache_batch_idx or []
+                self.cache_cow_mapping = cache_cow_mapping or []
+                self.cache_col_mapping = cache_col_mapping or []
 
             self.prompt_adapter_request = prompt_adapter_request
             self.multi_modal_kwargs = multi_modal_kwargs
@@ -452,6 +480,7 @@ class ModelInputForGPUBuilder(ModelRunnerInputBuilderBase[ModelInputForGPU]):
         self.attn_backend = self.runner.attn_backend
         self.scheduler_config = self.runner.scheduler_config
         self.sliding_window = self.runner.sliding_window
+        self.use_vmm = self.runner.use_vmm
         self.block_size = self.runner.block_size
         self.enable_lora = self.runner.lora_config is not None
         self.enable_prompt_adapter = (self.runner.prompt_adapter_config
@@ -486,7 +515,9 @@ class ModelInputForGPUBuilder(ModelRunnerInputBuilderBase[ModelInputForGPU]):
         # the current sequence group.
         self.inter_data_list: List[
             ModelInputForGPUBuilder.InterDataForSeqGroup] = []
-
+        logger.info(
+            f"Class {self.attn_metadata_builder}"
+        )
         self.attn_metadata_builder.prepare()
 
     def _compute_lens(self, inter_data: InterDataForSeqGroup, seq_idx: int,
@@ -533,6 +564,14 @@ class ModelInputForGPUBuilder(ModelRunnerInputBuilderBase[ModelInputForGPU]):
                     context_len,
                     seq_len,
                 )
+        if self.use_vmm:
+            cache_batch_id = seq_data.cache_buffer_id
+            query_len = seq_len - context_len
+            if cache_batch_id != -1:
+                inter_data.cache_batch_idx.append(cache_batch_id)
+                inter_data.cache_cow_mapping.extend([cache_batch_id] * query_len)
+                inter_data.cache_col_mapping.extend(range(context_len, context_len + query_len))
+
 
     def _compute_for_prefix_cache_hit(
             self, inter_data: InterDataForSeqGroup, seq_idx: int,
@@ -547,6 +586,7 @@ class ModelInputForGPUBuilder(ModelRunnerInputBuilderBase[ModelInputForGPU]):
         prefix_cache_hit = (computed_block_nums is not None
                             and len(computed_block_nums) > 0
                             and self.sliding_window is None
+                            and self.use_vmm is False
                             and inter_data.is_prompt)
         inter_data.prefix_cache_hit = prefix_cache_hit
 
@@ -755,6 +795,7 @@ class ModelInputForGPUBuilder(ModelRunnerInputBuilderBase[ModelInputForGPU]):
 
         for seq_idx in range(n_seqs):
             for per_seq_fn in self.per_seq_compute_fns:
+                # logger.info(f"Prepare seq func {per_seq_fn}")
                 per_seq_fn(inter_data, seq_idx, seq_group_metadata)
         for per_seq_group_fn in self.per_seq_group_compute_fns:
             per_seq_group_fn(inter_data, seq_group_metadata)
@@ -1025,6 +1066,7 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
         self.kv_cache_dtype = kv_cache_dtype
         self.sliding_window = model_config.get_sliding_window()
         self.block_size = cache_config.block_size
+        self.use_vmm = cache_config.use_vmm
         self.max_seq_len_to_capture = self.model_config.max_seq_len_to_capture
         self.max_batchsize_to_capture = \
             self.vllm_config.compilation_config.max_capture_size
@@ -1080,6 +1122,21 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
             .create_input_mapper(model_config)
         self.mm_registry.init_mm_limits_per_prompt(self.model_config)
 
+        # TODO: support these features in VMM
+        self.use_vmm = cache_config.use_vmm
+        logger.info(
+            f"Attention backend: {self.attn_backend.get_name()}"
+        )
+        if self.use_vmm:
+            if self.lora_config:
+                raise NotImplementedError("VMM is not supported with LoRA ")
+            if self.sliding_window:
+                raise NotImplementedError(
+                    "VMM is not supported with sliding window")
+            if self.attn_backend.get_name() != "FLASH_ATTN":
+                raise NotImplementedError(
+                    "VMM is only supported with FLASH_ATTN")
+            
         # Lazy initialization
         self.model: nn.Module  # Set after load_model
         # Set after load_model.
@@ -1216,6 +1273,7 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
         """
         self.builder.prepare(finished_requests_ids)
         for seq_group_metadata in seq_group_metadata_list:
+            seq_group_metadata.use_vmm = self.use_vmm
             try:
                 self.builder.add_seq_group(seq_group_metadata)
             except Exception as e:
@@ -1224,7 +1282,11 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
                                            str(e)) from e
 
         self.builder.reset_cached_inter_data()
-
+        for inter_data in self.builder.inter_data_list:
+            logger.info("Prepare input tensors step")
+            logger.info(f"cache_batch_idx {inter_data.cache_batch_idx}")
+            logger.info(f"cache_cow_mapping {inter_data.cache_cow_mapping}")
+            logger.info(f"cache_col_mapping {inter_data.cache_col_mapping}")
         return self.builder.build()  # type: ignore
 
     @contextmanager

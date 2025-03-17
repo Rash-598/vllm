@@ -37,7 +37,7 @@ from vllm.transformers_utils.config import (
     try_get_generation_config, uses_mrope)
 from vllm.transformers_utils.s3_utils import S3Model
 from vllm.transformers_utils.utils import is_s3
-from vllm.utils import (GiB_bytes, LayerBlockType, cuda_device_count_stateless,
+from vllm.utils import (GiB_bytes, MiB_bytes, MiB_bytes, MiB_bytes, LayerBlockType, cuda_device_count_stateless,
                         get_cpu_memory, random_uuid, resolve_obj_by_qualname)
 
 if TYPE_CHECKING:
@@ -1106,6 +1106,8 @@ class CacheConfig:
         enable_prefix_caching: bool = False,
         cpu_offload_gb: float = 0,
         calculate_kv_scales: Optional[bool] = None,
+        use_vmm: bool = False,
+        block_bytes_size: int = 2 * MiB_bytes,
     ) -> None:
         self.block_size = block_size
         self.gpu_memory_utilization = gpu_memory_utilization
@@ -1125,6 +1127,11 @@ class CacheConfig:
         self.num_gpu_blocks: Optional[int] = None
         self.num_cpu_blocks: Optional[int] = None
 
+        # new add for vmm
+        self.block_bytes_size = block_bytes_size
+        self.use_vmm = use_vmm
+
+        logger.info(f"cache_config: block_size={self.block_size}",)
         # Set calculate_kv_scales to False if the value is unset.
         if self.calculate_kv_scales is None:
             self.calculate_kv_scales = False
@@ -3438,10 +3445,8 @@ class VllmConfig:
                                                        self.speculative_config,
                                                        self.device_config)
             self.model_config.verify_with_parallel_config(self.parallel_config)
-
         if self.cache_config is not None:
             self.cache_config.verify_with_parallel_config(self.parallel_config)
-
         if self.lora_config:
             self.lora_config.verify_with_cache_config(self.cache_config)
             self.lora_config.verify_with_model_config(self.model_config)
@@ -3484,7 +3489,7 @@ class VllmConfig:
             self.compilation_config.pass_config.enable_noop = False
             self.compilation_config.level = CompilationLevel.PIECEWISE
             self.compilation_config.set_splitting_ops_for_v1()
-
+        
         self._set_cudagraph_sizes()
 
         if self.cache_config is not None and \
@@ -3494,7 +3499,6 @@ class VllmConfig:
                 "CPU offload is not supported with `torch.compile` yet."
                 " Disabling `torch.compile`.")
             self.compilation_config.level = CompilationLevel.NO_COMPILATION
-
         if ((not envs.VLLM_USE_V1) and self.lora_config is not None
                 and self.compilation_config.level
                 != CompilationLevel.NO_COMPILATION):
@@ -3517,11 +3521,13 @@ class VllmConfig:
 
             if self.cache_config is not None:
                 self.cache_config.enable_prefix_caching = False
-
+        logger.info(current_platform)
         current_platform.check_and_update_config(self)
-
+        logger.info(f"Post init cache block size: {self.cache_config.block_size}")
         if not self.instance_id:
             self.instance_id = random_uuid()[:5]
+        
+        logger.info(f"Post init cache block size: {self.cache_config.block_size}")
 
     def _set_cudagraph_sizes(self):
         """

@@ -220,6 +220,8 @@ class WorkerInput:
     blocks_to_copy: Optional[torch.Tensor] = None
     virtual_engine: int = 0
     num_steps: int = 1
+    allocated_block_counts: Optional[Dict[int, int]] = None
+    free_buffer_ids: Optional[List[int]] = None
 
     @classmethod
     def from_broadcasted_tensor_dict(
@@ -237,6 +239,8 @@ class WorkerInput:
             blocks_to_copy=tensor_dict.pop("blocks_to_copy"),
             virtual_engine=tensor_dict["virtual_engine"],
             num_steps=tensor_dict.pop("num_steps"),
+            allocated_block_counts=tensor_dict.pop("allocated_block_counts"),
+            free_buffer_ids=tensor_dict.pop("free_buffer_ids"),
         )
 
     def as_broadcastable_tensor_dict(
@@ -251,6 +255,8 @@ class WorkerInput:
             "blocks_to_copy": self.blocks_to_copy,
             "virtual_engine": self.virtual_engine,
             "num_steps": self.num_steps,
+            "allocated_block_counts": self.allocated_block_counts,
+            "free_buffer_ids": self.free_buffer_ids,
         }
 
         return tensor_dict

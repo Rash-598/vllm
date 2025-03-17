@@ -553,6 +553,65 @@ define_gpu_extension_target(
 target_compile_definitions(_C PRIVATE CUTLASS_ENABLE_DIRECT_CUDA_DRIVER_CALL=1)
 
 #
+# _vmm_C extension (VMM)
+#
+# find_package(Torch REQUIRED)
+
+# message(STATUS "Enabling VMM extension.")
+
+# set(VLLM_VMM_EXT_SRC
+#   "csrc/vmm/torch_bindings.cpp"
+#   "csrc/vmm/vmm.cu"
+# )
+
+# add_library(_vmm_C SHARED ${VLLM_VMM_EXT_SRC})
+# target_compile_features(_vmm_C PRIVATE cxx_std_17)
+# target_include_directories(_vmm_C PRIVATE ${Torch_INCLUDE_DIRS})
+# target_link_libraries(_vmm_C PRIVATE ${Torch_LIBRARIES} torch_cuda)
+
+# set_target_properties(_vmm_C PROPERTIES
+#   LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/vllm
+# )
+
+# if ((VLLM_GPU_LANG STREQUAL "CUDA") OR (VLLM_GPU_LANG STREQUAL "HIP"))
+#   message(STATUS "Enabling VMM extension.")
+
+#   set(VLLM_VMM_EXT_SRC
+#     "csrc/vmm/torch_bindings.cpp"
+#     "csrc/vmm/vmm.cu"
+#   )
+
+#   add_library(_vmm_C SHARED ${VLLM_VMM_EXT_SRC})
+#   target_compile_features(_vmm_C PRIVATE cxx_std_17)
+#   target_include_directories(_vmm_C PRIVATE ${Torch_INCLUDE_DIRS})
+#   target_link_libraries(_vmm_C PRIVATE ${Torch_LIBRARIES} torch_cuda)
+
+#   set_target_properties(_vmm_C PROPERTIES
+#     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/vllm
+#   )
+# endif()
+
+if ((VLLM_GPU_LANG STREQUAL "CUDA") OR (VLLM_GPU_LANG STREQUAL "HIP"))
+  message(STATUS "Enabling VMM extension.")
+  set(VLLM_VMM_EXT_SRC
+    "csrc/vmm/torch_bindings.cpp"
+    "csrc/vmm/vmm.cu"
+  )
+
+  define_gpu_extension_target(
+    _vmm_C
+    DESTINATION vllm
+    LANGUAGE ${VLLM_GPU_LANG}
+    SOURCES ${VLLM_VMM_EXT_SRC}
+    COMPILE_FLAGS ${VLLM_GPU_FLAGS}
+    ARCHITECTURES ${VLLM_GPU_ARCHES}
+    USE_SABI 3
+    WITH_SOABI
+  )
+endif()
+
+
+#
 # _moe_C extension
 #
 

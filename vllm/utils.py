@@ -146,6 +146,9 @@ GB_bytes = 1_000_000_000
 GiB_bytes = 1 << 30
 """The number of bytes in one gibibyte (GiB)."""
 
+MiB_bytes = 1 << 20
+"""The number of bytes in one mebibyte (MiB)."""
+
 STR_DTYPE_TO_TORCH_DTYPE = {
     "half": torch.half,
     "bfloat16": torch.bfloat16,
@@ -162,6 +165,23 @@ TORCH_DTYPE_TO_NUMPY_DTYPE = {
     torch.uint8: np.uint8,
     torch.int32: np.int32,
     torch.int64: np.int64,
+}
+
+# new add for vmm, use in wrap vmm cache ptr to tensor
+TORCH_DTYPE_TO_STR_DTYPE = {
+    torch.double: "double",
+    torch.float: "float",
+    torch.float64: "float64",
+    torch.float32: "float32",
+    torch.float16: "float16",
+    torch.half: "half",
+    torch.bfloat16: "bfloat16",
+    torch.int: "int",
+    torch.int64: "int64",
+    torch.int32: "int32",
+    torch.int16: "int16",
+    torch.int8: "int8",
+    torch.uint8: "uint8",
 }
 
 P = ParamSpec('P')
@@ -681,6 +701,35 @@ def create_kv_caches_with_random_flash(
         value_caches.append(key_value_cache[:, 1])
     return key_caches, value_caches
 
+def create_kv_caches_with_random_flash_non_page(
+    batch_size: int,
+    seq_len: int,
+    num_layers: int,
+    num_heads: int,
+    head_size: int,
+    cache_dtype: Optional[Union[str, torch.dtype]],
+    model_dtype: Optional[Union[str, torch.dtype]] = None,
+    seed: int = 0,
+    device: Optional[str] = "cuda",
+) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+
+    assert cache_dtype != "fp8"
+    torch.random.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+
+    torch_dtype = get_kv_cache_torch_dtype(cache_dtype, model_dtype)
+    key_value_cache_shape = (2, batch_size, seq_len, num_heads, head_size)
+    scale = head_size**-0.5
+    key_caches, value_caches = [], []
+    for _ in range(num_layers):
+        key_value_cache = torch.empty(size=key_value_cache_shape,
+                                      dtype=torch_dtype,
+                                      device=device)
+        key_value_cache.uniform_(-scale, scale)
+        key_caches.append(key_value_cache[0])
+        value_caches.append(key_value_cache[1])
+    return key_caches, value_caches
 
 def create_kv_caches_with_random(
     num_blocks: int,
@@ -2169,6 +2218,7 @@ def bind_kv_cache(
         ctx: dict[str, Any],
         kv_cache: list[list[torch.Tensor]],  # [virtual_engine][layer_index]
 ) -> None:
+    logger.info(f"KV cache type {type(kv_cache)}")
     # Bind the kv_cache tensor to Attention modules, similar to
     # ctx[layer_name].kv_cache[ve]=kv_cache[ve][extract_layer_index(layer_name)]
     # Special things handled here:

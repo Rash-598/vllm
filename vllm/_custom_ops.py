@@ -1213,6 +1213,22 @@ def reshape_and_cache_flash(
                                                    kv_cache_dtype, k_scale,
                                                    v_scale)
 
+# new add for vmm
+def reshape_and_cache_vmm(
+    key: torch.Tensor,
+    value: torch.Tensor,
+    key_cache: torch.Tensor,
+    value_cache: torch.Tensor,
+    cache_cow_mapping: torch.Tensor,
+    cache_col_mapping: torch.Tensor,
+    kv_cache_dtype: str,
+) -> None:
+    torch.ops._C_cache_ops.reshape_and_cache_vmm(key, value, key_cache,
+                                                 value_cache,
+                                                 cache_cow_mapping,
+                                                 cache_col_mapping,
+                                                 kv_cache_dtype)
+
 
 def concat_and_cache_mla(
     kv_c: torch.Tensor,

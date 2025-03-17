@@ -146,6 +146,16 @@ class FlashAttentionMetadata(AttentionMetadata):
 
     use_cuda_graph: bool
 
+    # new add for vmm
+    use_vmm: bool = False
+    # cache_batch_idx (batch_size, ) the index of batch in cache
+    # cache_cow_mapping (num_tokens,)  key/value cache cow in cache space
+    # cache_col_mapping (num_tokens,)  key/value cache col in cache space
+    cache_batch_idx: Optional[torch.Tensor] = None
+    cache_cow_mapping: Optional[torch.Tensor] = None
+    cache_col_mapping: Optional[torch.Tensor] = None
+
+
     # Maximum query length in the batch.
     max_query_len: Optional[int] = None
 
@@ -245,8 +255,12 @@ class FlashAttentionMetadata(AttentionMetadata):
             query_start_loc=query_start_loc,
             seq_start_loc=seq_start_loc,
             context_lens_tensor=context_lens_tensor,
-            block_tables=block_tables,
+            block_tables=None,
             use_cuda_graph=False,
+            use_vmm=self.use_vmm,
+            cache_batch_idx=None,
+            cache_cow_mapping=None,
+            cache_col_mapping=None,
             # Begin encoder & cross attn fields below...
             encoder_seq_lens=self.encoder_seq_lens,
             encoder_seq_lens_tensor=self.encoder_seq_lens_tensor,
@@ -254,6 +268,17 @@ class FlashAttentionMetadata(AttentionMetadata):
             max_encoder_seq_len=self.max_encoder_seq_len,
             cross_slot_mapping=self.cross_slot_mapping,
             cross_block_tables=self.cross_block_tables)
+        
+        # NOTE: slot_mapping / cache_cow_mapping cache_col_mapping only used
+        # for cache write, and no need to add them to _prefill_metadata or
+        # _decode_metadata
+        if not self.use_vmm:
+            self._cached_prefill_metadata.block_tables = block_tables
+
+        else:  # use_vmm
+            self._cached_prefill_metadata.cache_batch_idx = \
+                self.cache_batch_idx[:self.num_prefills]  # type: ignore
+            
         return self._cached_prefill_metadata
 
     @property
@@ -296,8 +321,12 @@ class FlashAttentionMetadata(AttentionMetadata):
             seq_start_loc=self.seq_start_loc[self.num_prefills:]
             if self.seq_start_loc is not None else None,
             context_lens_tensor=None,
-            block_tables=block_tables,
+            block_tables=None,
             use_cuda_graph=self.use_cuda_graph,
+            use_vmm=self.use_vmm,
+            cache_batch_idx=None,
+            cache_cow_mapping=None,
+            cache_col_mapping=None,
             # Begin encoder & cross attn fields below...
             encoder_seq_lens=self.encoder_seq_lens,
             encoder_seq_lens_tensor=self.encoder_seq_lens_tensor,
@@ -305,6 +334,13 @@ class FlashAttentionMetadata(AttentionMetadata):
             max_encoder_seq_len=self.max_encoder_seq_len,
             cross_slot_mapping=self.cross_slot_mapping,
             cross_block_tables=self.cross_block_tables)
+        
+        if not self.use_vmm:
+            self._cached_decode_metadata.block_tables = block_tables
+        else:  # use_vmm
+            self._cached_decode_metadata.use_cuda_graph = False
+            self._cached_decode_metadata.cache_batch_idx = \
+                self.cache_batch_idx[self.num_prefills:]  # type: ignore
         return self._cached_decode_metadata
 
     def advance_step(self,
@@ -403,6 +439,11 @@ class FlashAttentionMetadataBuilder(
         self.num_prefill_tokens = 0
         self.num_decode_tokens = 0
         self.has_prefix_cache_hit = False
+        # if use_vmm, we don't need to prepare block_tables & slot_mapping, but
+        # need to prepare cache_batch_idx, cache_cow_mapping, cache_col_mapping
+        self.cache_batch_idx: List[int] = []
+        self.cache_cow_mapping: List[int] = []
+        self.cache_col_mapping: List[int] = []
 
     def _add_seq_group(
             self, inter_data: "ModelInputForGPUBuilder.InterDataForSeqGroup",
@@ -437,6 +478,13 @@ class FlashAttentionMetadataBuilder(
                 self.num_decode_tokens += query_len
                 self.curr_seq_lens.append(curr_seq_len)
 
+            if self.input_builder.use_vmm:
+                self.cache_batch_idx = inter_data.cache_batch_idx
+                self.cache_cow_mapping = inter_data.cache_cow_mapping
+                self.cache_col_mapping = inter_data.cache_col_mapping
+                return
+            
+            # skippable for vmm prefix and slot
             # Compute block table.
             # TODO(sang): Combine chunked prefill and prefix caching by
             # only allowing multiple of block_size chunk size.
@@ -524,19 +572,23 @@ class FlashAttentionMetadataBuilder(
         seq_start_loc = list(accumulate(seq_lens, initial=0))
 
         num_seqs = len(seq_lens)
-        if use_captured_graph:
-            self.slot_mapping.extend([PAD_SLOT_ID] * cuda_graph_pad_size)
-            self.block_tables.extend([] * cuda_graph_pad_size)
-            num_decode_tokens = batch_size - self.num_prefill_tokens
-            block_tables = self._get_graph_runner_block_tables(
-                num_seqs, self.block_tables)
+        
+        if not self.input_builder.use_vmm:
+            if use_captured_graph:
+                self.slot_mapping.extend([PAD_SLOT_ID] * cuda_graph_pad_size)
+                self.block_tables.extend([] * cuda_graph_pad_size)
+                num_decode_tokens = batch_size - self.num_prefill_tokens
+                block_tables = self._get_graph_runner_block_tables(
+                    num_seqs, self.block_tables)
+            else:
+                block_tables = make_tensor_with_pad(
+                    self.block_tables,
+                    pad=0,
+                    dtype=torch.int,
+                    device=device,
+                )
         else:
-            block_tables = make_tensor_with_pad(
-                self.block_tables,
-                pad=0,
-                dtype=torch.int,
-                device=device,
-            )
+            block_tables = None
         assert max_query_len > 0, ("query_lens: {}".format(query_lens))
 
         assert device is not None
@@ -544,8 +596,6 @@ class FlashAttentionMetadataBuilder(
                                                device, self.runner.pin_memory)
         seq_lens_tensor = async_tensor_h2d(seq_lens, torch.int, device,
                                            self.runner.pin_memory)
-        slot_mapping_tensor = async_tensor_h2d(self.slot_mapping, torch.long,
-                                               device, self.runner.pin_memory)
         query_start_loc_tensor = async_tensor_h2d(query_start_loc, torch.int32,
                                                   device,
                                                   self.runner.pin_memory)
@@ -556,7 +606,25 @@ class FlashAttentionMetadataBuilder(
             for modality, placeholder_map in
             self.multimodal_placeholder_maps.items()
         }
-
+        logger.info(f"Flash attn use_vmm: {self.input_builder.use_vmm}")
+        if self.input_builder.use_vmm:
+            slot_mapping_tensor = None
+            cache_batch_indx_tensor = async_tensor_h2d(
+                self.cache_batch_idx, torch.int32, device,
+                self.runner.pin_memory)
+            cache_cow_mapping_tensor = async_tensor_h2d(
+                self.cache_cow_mapping, torch.int32, device,
+                self.runner.pin_memory)
+            cache_col_mapping_tensor = async_tensor_h2d(
+                self.cache_col_mapping, torch.int32, device,
+                self.runner.pin_memory)
+            logger.info(f"cache_batch_indx_tensor: {cache_batch_indx_tensor.shape}, cache_cow_mapping_tensor : {cache_cow_mapping_tensor.shape}, cache_col_mapping_tensor: {cache_col_mapping_tensor.shape}")
+        
+        else:
+            slot_mapping_tensor = async_tensor_h2d(self.slot_mapping, torch.long,
+                                               device, self.runner.pin_memory)
+            cache_batch_indx_tensor = cache_col_mapping_tensor = cache_cow_mapping_tensor = None
+            
         return FlashAttentionMetadata(
             num_prefills=self.num_prefills,
             slot_mapping=slot_mapping_tensor,
@@ -574,6 +642,10 @@ class FlashAttentionMetadataBuilder(
             seq_start_loc=seq_start_loc_tensor,
             context_lens_tensor=context_lens_tensor,
             block_tables=block_tables,
+            use_vmm=self.input_builder.use_vmm,
+            cache_batch_idx=cache_batch_indx_tensor,
+            cache_cow_mapping=cache_cow_mapping_tensor,
+            cache_col_mapping=cache_col_mapping_tensor,
             use_cuda_graph=use_captured_graph,
         )
 
@@ -702,10 +774,17 @@ class FlashAttentionImpl(AttentionImpl):
         alibi_slopes: Optional[torch.Tensor] = self.alibi_slopes
         logits_soft_cap: Optional[float] = self.logits_soft_cap
         fp8_attention = kv_cache_dtype.startswith("fp8")
-
-        if kv_cache.numel() > 0:
+        use_vmm = attn_metadata.use_vmm
+        # logger.info(f"flash attn vmm: {use_vmm}")
+        kv_cache_numel = 0
+        if isinstance(kv_cache, list):
+            kv_cache_numel = sum([kv_cache[i].numel() for i in range(len(kv_cache))])
+        else:
+            kv_cache_numel = kv_cache.numel()
+        if kv_cache_numel > 0:
             key_cache = kv_cache[0]
             value_cache = kv_cache[1]
+            # logger.info(f"key_cache shape {key_cache.shape} value_cache shape {value_cache.shape}")
             # We skip updating the KV cache under two conditions:
             #  a. When the Attention Type is ENCODER. In this phase, we compute
             #     only the encoder attention without updating the cache.
@@ -726,16 +805,68 @@ class FlashAttentionImpl(AttentionImpl):
                 # If kv_cache is not provided, the new key and value tensors are
                 # not cached. This happens during the initial memory
                 # profiling run.
-                torch.ops._C_cache_ops.reshape_and_cache_flash(
-                    key,
-                    value,
-                    kv_cache[0],
-                    kv_cache[1],
-                    updated_slot_mapping.flatten(),  # type: ignore[union-attr]
-                    kv_cache_dtype,
-                    layer._k_scale,
-                    layer._v_scale,
-                )
+                if use_vmm:
+                    logger.info(f"VMM shapes key {key.shape} value {value.shape} key_cache {key_cache.shape} value_cache {value_cache.shape}")
+                    logger.info(f"cahce cow mapping {attn_metadata.cache_cow_mapping.shape} cache col mapping {attn_metadata.cache_col_mapping.shape}")
+                    # logger.info(f"key: {key} value: {value}")
+                    logger.info(f"Running vmm reshape and cache")
+                    num_tokens = key.size(0)
+                    num_heads = key.size(1)
+                    head_size = key.size(2)
+
+                    key_stride = key.stride(0)
+                    value_stride = value.stride(0)
+                    cache_batch_stride = key_cache.stride(0)
+                    cache_token_stride = key_cache.stride(1)
+                    logger.info(f"""
+                                num_tokens {num_tokens}, num_heads {num_heads}, head_size {head_size} 
+                                key stride {key_stride} value stride {value_stride} 
+                                cache batch stride {cache_batch_stride} cache token stride {cache_token_stride}
+                                key_data_ptr {key.data_ptr()} value_data_ptr {value.data_ptr()},
+                                key_cache_data_ptr {key_cache.data_ptr()} value_cache_data_ptr {value_cache.data_ptr()},
+                                cache_cow_mapping_data_ptr {attn_metadata.cache_cow_mapping.data_ptr()}
+                                cache_col_mapping_data_ptr {attn_metadata.cache_col_mapping.data_ptr()}""")
+                    torch.ops._C_cache_ops.reshape_and_cache_vmm(
+                        key,
+                        value,
+                        key_cache,
+                        value_cache,
+                        attn_metadata.cache_cow_mapping,
+                        attn_metadata.cache_col_mapping,
+                        kv_cache_dtype
+                    )
+                    logger.info(f"After run VMM shapes key {key.shape} value {value.shape} key_cache {key_cache.shape} value_cache {value_cache.shape}")
+                    logger.info(f"cahce cow mapping {attn_metadata.cache_cow_mapping.shape} cache col mapping {attn_metadata.cache_col_mapping.shape}")
+                else:
+                    # logger.info(f"Regular shapes key {key.shape} value {value.shape} key_cache {key_cache.shape} value_cache {value_cache.shape}, updated_slot_mapping {updated_slot_mapping.shape}")
+                    # logger.info(f"key: {key} value: {value}")
+                    num_tokens = updated_slot_mapping.flatten().size(0)
+                    num_heads = key.size(1)
+                    head_size = key.size(2)
+
+                    key_stride = key.stride(0)
+                    value_stride = value.stride(0)
+                    cache_batch_stride = key_cache.stride(0)
+                    cache_token_stride = key_cache.stride(1)
+                    logger.info(f"""num_tokens {num_tokens}, num_heads {num_heads}, head_size {head_size} 
+                                key stride {key_stride} value stride {value_stride} 
+                                cache batch stride {cache_batch_stride} cache token stride {cache_token_stride},
+                                updated_slot_mapping {updated_slot_mapping.shape},
+                                key_data_ptr {key.data_ptr()} value_data_ptr {value.data_ptr()},
+                                key_cache_data_ptr {key_cache.data_ptr()} value_cache_data_ptr {value_cache.data_ptr()},
+                                updated_slot_mapping_data_ptr {updated_slot_mapping.flatten().data_ptr()}"""
+                    )
+                    torch.ops._C_cache_ops.reshape_and_cache_flash(
+                        key,
+                        value,
+                        kv_cache[0],
+                        kv_cache[1],
+                        updated_slot_mapping.flatten(),  # type: ignore[union-attr]
+                        kv_cache_dtype,
+                        layer._k_scale,
+                        layer._v_scale,
+                    )
+                    # logger.info(f"After run regular shapes key {key.shape} value {value.shape} key_cache {key_cache.shape} value_cache {value_cache.shape}, updated_slot_mapping {updated_slot_mapping.shape}")
 
                 if fp8_attention:
                     kv_cache = kv_cache.view(torch.float8_e4m3fn)
@@ -763,7 +894,8 @@ class FlashAttentionImpl(AttentionImpl):
 
         if prefill_meta := attn_metadata.prefill_metadata:
             # Prompt run.
-            if (kv_cache.numel() == 0 or prefill_meta.block_tables is None
+            logger.info(f"numel {kv_cache_numel}")
+            if (kv_cache_numel == 0 or prefill_meta.block_tables is None
                     or prefill_meta.block_tables.numel() == 0):
                 # normal attention
                 # When block_tables are not filled, it means q and k are the
@@ -773,7 +905,7 @@ class FlashAttentionImpl(AttentionImpl):
 
                 key = key[:num_prefill_kv_tokens]
                 value = value[:num_prefill_kv_tokens]
-
+                logger.info(f"Shapes key {key.shape} value {value.shape} query {query.shape}")
                 if fp8_attention:
                     num_kv_tokens, num_kv_heads, head_size = key.shape
 
@@ -882,23 +1014,41 @@ class FlashAttentionImpl(AttentionImpl):
                     block_tables_arg,
                 ) = get_seq_len_block_table_args(decode_meta, False, attn_type)
                 descale_shape = (seq_lens_arg.shape[0], key_cache.shape[-2])
-                flash_attn_with_kvcache(
-                    q=decode_query.unsqueeze(1),
-                    k_cache=key_cache,
-                    v_cache=value_cache,
-                    block_table=block_tables_arg,
-                    cache_seqlens=seq_lens_arg,
-                    softmax_scale=softmax_scale,
-                    causal=True,
-                    window_size=window_size,
-                    alibi_slopes=alibi_slopes,
-                    softcap=logits_soft_cap,
-                    out=decode_output.unsqueeze(1),
-                    fa_version=self.vllm_flash_attn_version,
+                if use_vmm:
+                    cur_max_seq_len = decode_meta.max_decode_seq_len
+                    flash_attn_with_kvcache(
+                        q=decode_query.unsqueeze(1),
+                        k_cache=key_cache[:, :cur_max_seq_len],
+                        v_cache=value_cache[:, :cur_max_seq_len],
+                        cache_seqlens=seq_lens_arg,
+                        cache_batch_idx=decode_meta.cache_batch_idx,
+                        softmax_scale=softmax_scale,
+                        causal=True,
+                        window_size=window_size,
+                        alibi_slopes=alibi_slopes,
+                        softcap=logits_soft_cap,
+                        out=decode_output.unsqueeze(1),
+                        fa_version=self.vllm_flash_attn_version,
+                    )
+                else:
+                    flash_attn_with_kvcache(
+                        q=decode_query.unsqueeze(1),
+                        k_cache=key_cache,
+                        v_cache=value_cache,
+                        block_table=block_tables_arg,
+                        cache_seqlens=seq_lens_arg,
+                        softmax_scale=softmax_scale,
+                        causal=True,
+                        window_size=window_size,
+                        alibi_slopes=alibi_slopes,
+                        softcap=logits_soft_cap,
+                        out=decode_output.unsqueeze(1),
+                        fa_version=self.vllm_flash_attn_version,
                     q_descale=layer._q_scale.expand(descale_shape),
                     k_descale=layer._k_scale.expand(descale_shape),
                     v_descale=layer._v_scale.expand(descale_shape),
-                )
+                    )
+
         return output
 
 

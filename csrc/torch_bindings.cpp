@@ -565,6 +565,17 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _cache_ops), cache_ops) {
       "gather_cache(Tensor src_cache, Tensor! dst, Tensor block_table, "
       "Tensor cu_seq_lens, int batch_size, Tensor? seq_starts) -> ()");
   cache_ops.impl("gather_cache", torch::kCUDA, &gather_cache);
+
+  
+  // new add for vmm
+  cache_ops.def(
+    "reshape_and_cache_vmm(Tensor key, Tensor value,"
+    "                        Tensor! key_cache,"
+    "                        Tensor! value_cache,"
+    "                        Tensor cache_cow_mapping,"
+    "                        Tensor cache_col_mapping,"
+    "                        str kv_cache_dtype) -> ()");
+  cache_ops.impl("reshape_and_cache_vmm", torch::kCUDA, &reshape_and_cache_vmm);
 }
 
 TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _cuda_utils), cuda_utils) {

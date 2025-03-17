@@ -184,6 +184,8 @@ class SequenceData(msgspec.Struct,
     # It is used to compute mrope_position_ids.
     _mrope_position_delta: Optional[int] = None
 
+    cache_buffer_id: int = -1
+
     @staticmethod
     def from_prompt_token_counts(
             *token_counts: tuple[int, int]) -> "SequenceData":
@@ -230,6 +232,9 @@ class SequenceData(msgspec.Struct,
         assert self._output_token_ids.typecode == "l"
         self._prompt_token_ids_tuple: tuple[int, ...] = tuple(
             self._prompt_token_ids)
+        
+        # new add for vmm
+        self.cache_buffer_id = -1
         self._update_cached_all_tokens()
 
     def _update_cached_all_tokens(self):
@@ -441,6 +446,9 @@ class Sequence:
         self.read_offset = 0
         # Input + output tokens
         self.tokens: Optional[list[str]] = None
+
+        # new add for vmm
+        self.cache_buffer_id = -1
 
     @property
     def n_blocks(self) -> int:
@@ -979,6 +987,7 @@ class SequenceGroupMetadata(
     cross_block_table: Optional[list[int]] = None
     prompt_adapter_request: Optional[PromptAdapterRequest] = None
     token_chunk_size: Optional[int] = None
+    use_vmm: bool = False
 
     ### Stateful fields that are lazily defined. ###
     # The number of speculative tokens adopted in this request.
@@ -1329,6 +1338,9 @@ class ExecuteModelRequest(
     last_sampled_token_ids: Optional[torch.Tensor] = None
     # Async callback
     async_callback: Optional[Callable] = None
+    # new add for vmm
+    allocated_block_counts: dict[int, int] = msgspec.field(default_factory=dict)
+    free_buffer_ids: list[int] = msgspec.field(default_factory=list)
 
     @property
     def is_first_multi_step(self) -> bool:

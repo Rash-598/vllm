@@ -87,6 +87,17 @@ def get_attn_backend(
     is_blocksparse: bool = False,
     use_mla: bool = False,
 ) -> Type[AttentionBackend]:
+    import inspect
+    stack = inspect.stack()
+    if len(stack) > 1:
+        caller = stack[1]
+        filename = caller.filename
+        line_number = caller.lineno
+        function_name = caller.function
+        logger.info(
+            f"get_attn_backend called from {function_name} "
+            f"({filename}:{line_number})")
+        
     """Selects which attention backend to use and lazily imports it."""
     # Accessing envs.* behind an @lru_cache decorator can cause the wrong
     # value to be returned from the cache if the value changes between calls.
