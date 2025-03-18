@@ -1504,8 +1504,7 @@ class EngineArgs:
             additional_config=self.additional_config,
         )
         logger.info(f"engine vllm block size: {cache_config.block_size} ")
-        if envs.VLLM_USE_V1:
-            self._override_v1_engine_config(config)
+        
         return config
 
     def _is_v1_supported_oracle(self, model_config: ModelConfig) -> bool:

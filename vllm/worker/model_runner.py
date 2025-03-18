@@ -770,6 +770,7 @@ class ModelInputForGPUBuilder(ModelRunnerInputBuilderBase[ModelInputForGPU]):
         """Add a sequence group to the builder."""
         seq_ids = seq_group_metadata.seq_data.keys()
         n_seqs = len(seq_ids)
+        logger.info(f"Sequences count {n_seqs} for request {seq_group_metadata.request_id}")
         is_prompt = seq_group_metadata.is_prompt
 
         if is_prompt:
@@ -1272,6 +1273,7 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
         If cuda graph is required, this API automatically pads inputs.
         """
         self.builder.prepare(finished_requests_ids)
+        logger.info(f"Sequence group count: {len(seq_group_metadata_list)}")
         for seq_group_metadata in seq_group_metadata_list:
             seq_group_metadata.use_vmm = self.use_vmm
             try:
@@ -1282,11 +1284,11 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
                                            str(e)) from e
 
         self.builder.reset_cached_inter_data()
-        for inter_data in self.builder.inter_data_list:
-            logger.info("Prepare input tensors step")
-            logger.info(f"cache_batch_idx {inter_data.cache_batch_idx}")
-            logger.info(f"cache_cow_mapping {inter_data.cache_cow_mapping}")
-            logger.info(f"cache_col_mapping {inter_data.cache_col_mapping}")
+        # for inter_data in self.builder.inter_data_list:
+        #     logger.info("Prepare input tensors step")
+        #     logger.info(f"cache_batch_idx {inter_data.cache_batch_idx}")
+        #     logger.info(f"cache_cow_mapping {inter_data.cache_cow_mapping}")
+        #     logger.info(f"cache_col_mapping {inter_data.cache_col_mapping}")
         return self.builder.build()  # type: ignore
 
     @contextmanager

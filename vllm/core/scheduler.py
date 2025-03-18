@@ -1563,12 +1563,12 @@ class Scheduler:
                 cross_block_table = None
 
             for seq in seq_group.get_seqs(status=SequenceStatus.RUNNING):
-                logger.info(f"""
-                    Step 1
-                    Scheduling seq_id {seq.seq_id} with token_chunk_size {token_chunk_size} 
-                    and block_size {seq.block_size}
-                    data {seq.data}"""
-                )            
+                # logger.info(f"""
+                #     Step 1
+                #     Scheduling seq_id {seq.seq_id} with token_chunk_size {token_chunk_size} 
+                #     and block_size {seq.block_size}
+                #     data {seq.data}"""
+                # )            
                 seq_id = seq.seq_id
                 seq_data[seq_id] = seq.data
                 if not self.use_vmm:
@@ -1583,11 +1583,11 @@ class Scheduler:
 
             do_sample = True
             is_prompt = seq_group.is_prefill()
-            logger.info(f"""
-                Step 2
-                Scheduling seq_group {seq_group.request_id} with token_chunk_size {token_chunk_size}
-                is_prompt {is_prompt} do_sample {do_sample}"""
-            )
+            # logger.info(f"""
+            #     Step 2
+            #     Scheduling seq_group {seq_group.request_id} with token_chunk_size {token_chunk_size}
+            #     is_prompt {is_prompt} do_sample {do_sample}"""
+            # )
             # We should send the metadata to workers when the first prefill
             # is sent. Subsequent requests could be chunked prefill or decode.
             is_first_prefill = False
@@ -1602,18 +1602,15 @@ class Scheduler:
                 # NOTE: We use get_len instead of get_prompt_len because when
                 # a sequence is preempted, prefill includes previous generated
                 # output tokens.
-                logger.info(f"""
-                    Decoding
-                    Scheduling seq_id {seqs[0].seq_id} with token_chunk_size {token_chunk_size}
-                    and num_computed_tokens {num_computed_tokens}
-                    data len {seqs[0].data.get_len()}"""
-                )
+                # logger.info(f"""
+                #     Decoding
+                #     Scheduling seq_id {seqs[0].seq_id} with token_chunk_size {token_chunk_size}
+                #     and num_computed_tokens {num_computed_tokens}
+                #     data len {seqs[0].data.get_len()}"""
+                # )
                 if (token_chunk_size + num_computed_tokens
                         < seqs[0].data.get_len()):
                     do_sample = False
-
-            logger.info(f"""
-                    Block tables {block_tables}""")
             # It assumes the scheduled_seq_groups is ordered by
             # prefill < decoding.
             if is_first_prefill or not self.scheduler_config.send_delta_data:

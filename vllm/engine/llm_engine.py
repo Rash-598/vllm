@@ -522,6 +522,7 @@ class LLMEngine:
 
         logger.info(f"Init engine block size {vllm_config.cache_config.block_size}")
         engine_cls = cls
+        logger.info(f"use v1 engine: {envs.VLLM_USE_V1}")
         if envs.VLLM_USE_V1:
             from vllm.v1.engine.llm_engine import LLMEngine as V1LLMEngine
             engine_cls = V1LLMEngine

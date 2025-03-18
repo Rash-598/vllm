@@ -609,6 +609,9 @@ class FlashAttentionMetadataBuilder(
         logger.info(f"Flash attn use_vmm: {self.input_builder.use_vmm}")
         if self.input_builder.use_vmm:
             slot_mapping_tensor = None
+            logger.info(f"cache_batch_idx: {self.cache_batch_idx}")
+            logger.info(f"cache_cow_mapping: {self.cache_cow_mapping}")
+            logger.info(f"cache_col_mapping: {self.cache_col_mapping}")
             cache_batch_indx_tensor = async_tensor_h2d(
                 self.cache_batch_idx, torch.int32, device,
                 self.runner.pin_memory)
@@ -621,6 +624,7 @@ class FlashAttentionMetadataBuilder(
             logger.info(f"cache_batch_indx_tensor: {cache_batch_indx_tensor.shape}, cache_cow_mapping_tensor : {cache_cow_mapping_tensor.shape}, cache_col_mapping_tensor: {cache_col_mapping_tensor.shape}")
         
         else:
+            logger.info(f"slot_mapping: {self.slot_mapping}")
             slot_mapping_tensor = async_tensor_h2d(self.slot_mapping, torch.long,
                                                device, self.runner.pin_memory)
             cache_batch_indx_tensor = cache_col_mapping_tensor = cache_cow_mapping_tensor = None
@@ -775,7 +779,6 @@ class FlashAttentionImpl(AttentionImpl):
         logits_soft_cap: Optional[float] = self.logits_soft_cap
         fp8_attention = kv_cache_dtype.startswith("fp8")
         use_vmm = attn_metadata.use_vmm
-        logger.info(f"flash attn vmm: {use_vmm}")
         kv_cache_numel = 0
         if isinstance(kv_cache, list):
             kv_cache_numel = sum([kv_cache[i].numel() for i in range(len(kv_cache))])
@@ -809,23 +812,23 @@ class FlashAttentionImpl(AttentionImpl):
                     # logger.info(f"VMM shapes key {key.shape} value {value.shape} key_cache {key_cache.shape} value_cache {value_cache.shape}")
                     # logger.info(f"cahce cow mapping {attn_metadata.cache_cow_mapping.shape} cache col mapping {attn_metadata.cache_col_mapping.shape}")
                     # # logger.info(f"key: {key} value: {value}")
-                    logger.info(f"Running vmm reshape and cache")
-                    num_tokens = key.size(0)
-                    num_heads = key.size(1)
-                    head_size = key.size(2)
+                    # logger.info(f"Running vmm reshape and cache")
+                    # num_tokens = key.size(0)
+                    # num_heads = key.size(1)
+                    # head_size = key.size(2)
 
-                    key_stride = key.stride(0)
-                    value_stride = value.stride(0)
-                    cache_batch_stride = key_cache.stride(0)
-                    cache_token_stride = key_cache.stride(1)
-                    logger.info(f"""
-                                num_tokens {num_tokens}, num_heads {num_heads}, head_size {head_size} 
-                                key stride {key_stride} value stride {value_stride} 
-                                cache batch stride {cache_batch_stride} cache token stride {cache_token_stride}
-                                key_data_ptr {key.data_ptr()} value_data_ptr {value.data_ptr()},
-                                key_cache_data_ptr {key_cache.data_ptr()} value_cache_data_ptr {value_cache.data_ptr()},
-                                cache_cow_mapping_data_ptr {attn_metadata.cache_cow_mapping.data_ptr()}
-                                cache_col_mapping_data_ptr {attn_metadata.cache_col_mapping.data_ptr()}""")
+                    # key_stride = key.stride(0)
+                    # value_stride = value.stride(0)
+                    # cache_batch_stride = key_cache.stride(0)
+                    # cache_token_stride = key_cache.stride(1)
+                    # logger.info(f"""
+                    #             num_tokens {num_tokens}, num_heads {num_heads}, head_size {head_size} 
+                    #             key stride {key_stride} value stride {value_stride} 
+                    #             cache batch stride {cache_batch_stride} cache token stride {cache_token_stride}
+                    #             key_data_ptr {key.data_ptr()} value_data_ptr {value.data_ptr()},
+                    #             key_cache_data_ptr {key_cache.data_ptr()} value_cache_data_ptr {value_cache.data_ptr()},
+                    #             cache_cow_mapping_data_ptr {attn_metadata.cache_cow_mapping.data_ptr()}
+                    #             cache_col_mapping_data_ptr {attn_metadata.cache_col_mapping.data_ptr()}""")
                     torch.ops._C_cache_ops.reshape_and_cache_vmm(
                         key,
                         value,
@@ -894,7 +897,7 @@ class FlashAttentionImpl(AttentionImpl):
 
         if prefill_meta := attn_metadata.prefill_metadata:
             # Prompt run.
-            logger.info(f"numel {kv_cache_numel}")
+            # logger.info(f"numel {kv_cache_numel}")
             if (kv_cache_numel == 0 or prefill_meta.block_tables is None
                     or prefill_meta.block_tables.numel() == 0):
                 # normal attention
@@ -905,7 +908,7 @@ class FlashAttentionImpl(AttentionImpl):
 
                 key = key[:num_prefill_kv_tokens]
                 value = value[:num_prefill_kv_tokens]
-                logger.info(f"Shapes key {key.shape} value {value.shape} query {query.shape}")
+                # logger.info(f"Shapes key {key.shape} value {value.shape} query {query.shape}")
                 if fp8_attention:
                     num_kv_tokens, num_kv_heads, head_size = key.shape
 
