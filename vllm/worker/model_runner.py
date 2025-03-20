@@ -770,7 +770,7 @@ class ModelInputForGPUBuilder(ModelRunnerInputBuilderBase[ModelInputForGPU]):
         """Add a sequence group to the builder."""
         seq_ids = seq_group_metadata.seq_data.keys()
         n_seqs = len(seq_ids)
-        logger.info(f"Sequences count {n_seqs} for request {seq_group_metadata.request_id}")
+        # logger.info(f"Sequences count {n_seqs} for request {seq_group_metadata.request_id}")
         is_prompt = seq_group_metadata.is_prompt
 
         if is_prompt:
@@ -867,11 +867,12 @@ class ModelInputForGPUBuilder(ModelRunnerInputBuilderBase[ModelInputForGPU]):
         input_tokens = []
         token_types = []
         for inter_data in self.inter_data_list:
+            logger.info(f"request id: {inter_data.request_id} inter data input tokens list {len(inter_data.input_tokens)}")
             for cur_input_tokens in inter_data.input_tokens:
                 input_tokens.extend(cur_input_tokens)
             for cur_token_types in inter_data.token_types:
                 token_types.extend(cur_token_types)
-
+        logger.info(f"flatten input tokens {len(input_tokens)}")
         if not input_tokens:
             # This may happen when all prefill requests hit
             # prefix caching and there is no decode request.
@@ -1273,7 +1274,16 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
         If cuda graph is required, this API automatically pads inputs.
         """
         self.builder.prepare(finished_requests_ids)
-        logger.info(f"Sequence group count: {len(seq_group_metadata_list)}")
+        # stack = inspect.stack()
+        # if len(stack) > 1:
+        #     caller = stack[1]
+        #     filename = caller.filename
+        #     line_number = caller.lineno
+        #     function_name = caller.function
+        #     logger.info(
+        #         f"called from {function_name} "
+        #         f"({filename}:{line_number})")
+        # logger.info(f"Preparing model input tensors for {len(seq_group_metadata_list)} requests")
         for seq_group_metadata in seq_group_metadata_list:
             seq_group_metadata.use_vmm = self.use_vmm
             try:
@@ -1284,11 +1294,13 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
                                            str(e)) from e
 
         self.builder.reset_cached_inter_data()
+        # logger.info("============Start==============")
         # for inter_data in self.builder.inter_data_list:
         #     logger.info("Prepare input tensors step")
         #     logger.info(f"cache_batch_idx {inter_data.cache_batch_idx}")
         #     logger.info(f"cache_cow_mapping {inter_data.cache_cow_mapping}")
         #     logger.info(f"cache_col_mapping {inter_data.cache_col_mapping}")
+        # logger.info("============End==============")
         return self.builder.build()  # type: ignore
 
     @contextmanager
@@ -1698,6 +1710,16 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
 
         If cuda graph is required, this API automatically pads inputs.
         """
+        # stack = inspect.stack()
+        # if len(stack) > 1:
+        #     caller = stack[1]
+        #     filename = caller.filename
+        #     line_number = caller.lineno
+        #     function_name = caller.function
+        #     logger.info(
+        #         f"called from {function_name} "
+        #         f"({filename}:{line_number})")
+        
         model_input = self._prepare_model_input_tensors(
             seq_group_metadata_list, finished_requests_ids)
         if get_pp_group().is_last_rank:

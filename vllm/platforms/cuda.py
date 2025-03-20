@@ -167,11 +167,11 @@ class CudaPlatformBase(Platform):
                 "currently not supported with CUDA Graphs.")
             vllm_config.model_config.enforce_eager = True
             compilation_config.use_cudagraph = False
-        vllm_config.model_config.enforce_eager = False
-        compilation_config.use_cudagraph = False
-        if cache_config.use_vmm:
-            vllm_config.model_config.enforce_eager = True
-            compilation_config.use_cudagraph = False
+        # vllm_config.model_config.enforce_eager = True
+        # compilation_config.use_cudagraph = False
+        # if cache_config.use_vmm:
+        #     vllm_config.model_config.enforce_eager = False
+        #     compilation_config.use_cudagraph = False
 
     @classmethod
     def get_current_memory_usage(cls,

@@ -427,6 +427,7 @@ class FlashAttentionMetadataBuilder(
         self.block_size = input_builder.block_size
 
     def prepare(self):
+        logger.info("Preparing FlashAttention metadata")
         self.slot_mapping: List[int] = []
         self.prefill_seq_lens: List[int] = []
         self.context_lens: List[int] = []
@@ -479,9 +480,9 @@ class FlashAttentionMetadataBuilder(
                 self.curr_seq_lens.append(curr_seq_len)
 
             if self.input_builder.use_vmm:
-                self.cache_batch_idx = inter_data.cache_batch_idx
-                self.cache_cow_mapping = inter_data.cache_cow_mapping
-                self.cache_col_mapping = inter_data.cache_col_mapping
+                self.cache_batch_idx.extend(inter_data.cache_batch_idx)
+                self.cache_cow_mapping.extend(inter_data.cache_cow_mapping)
+                self.cache_col_mapping.extend(inter_data.cache_col_mapping)
                 return
             
             # skippable for vmm prefix and slot
@@ -606,12 +607,12 @@ class FlashAttentionMetadataBuilder(
             for modality, placeholder_map in
             self.multimodal_placeholder_maps.items()
         }
-        logger.info(f"Flash attn use_vmm: {self.input_builder.use_vmm}")
+        # logger.info(f"Flash attn use_vmm: {self.input_builder.use_vmm}")
         if self.input_builder.use_vmm:
             slot_mapping_tensor = None
-            logger.info(f"cache_batch_idx: {self.cache_batch_idx}")
-            logger.info(f"cache_cow_mapping: {self.cache_cow_mapping}")
-            logger.info(f"cache_col_mapping: {self.cache_col_mapping}")
+            # logger.info(f"cache_batch_idx: {self.cache_batch_idx}")
+            # logger.info(f"cache_cow_mapping: {self.cache_cow_mapping}")
+            # logger.info(f"cache_col_mapping: {self.cache_col_mapping}")
             cache_batch_indx_tensor = async_tensor_h2d(
                 self.cache_batch_idx, torch.int32, device,
                 self.runner.pin_memory)
@@ -621,10 +622,10 @@ class FlashAttentionMetadataBuilder(
             cache_col_mapping_tensor = async_tensor_h2d(
                 self.cache_col_mapping, torch.int32, device,
                 self.runner.pin_memory)
-            logger.info(f"cache_batch_indx_tensor: {cache_batch_indx_tensor.shape}, cache_cow_mapping_tensor : {cache_cow_mapping_tensor.shape}, cache_col_mapping_tensor: {cache_col_mapping_tensor.shape}")
+            # logger.info(f"cache_batch_indx_tensor: {cache_batch_indx_tensor.shape}, cache_cow_mapping_tensor : {cache_cow_mapping_tensor.shape}, cache_col_mapping_tensor: {cache_col_mapping_tensor.shape}")
         
         else:
-            logger.info(f"slot_mapping: {self.slot_mapping}")
+            # logger.info(f"slot_mapping: {self.slot_mapping}")
             slot_mapping_tensor = async_tensor_h2d(self.slot_mapping, torch.long,
                                                device, self.runner.pin_memory)
             cache_batch_indx_tensor = cache_col_mapping_tensor = cache_cow_mapping_tensor = None
@@ -810,6 +811,8 @@ class FlashAttentionImpl(AttentionImpl):
                 # profiling run.
                 if use_vmm:
                     # logger.info(f"VMM shapes key {key.shape} value {value.shape} key_cache {key_cache.shape} value_cache {value_cache.shape}")
+                    # if key.numel() != 0:
+                    #     raise RuntimeError("key numel is not 0")
                     # logger.info(f"cahce cow mapping {attn_metadata.cache_cow_mapping.shape} cache col mapping {attn_metadata.cache_col_mapping.shape}")
                     # # logger.info(f"key: {key} value: {value}")
                     # logger.info(f"Running vmm reshape and cache")
