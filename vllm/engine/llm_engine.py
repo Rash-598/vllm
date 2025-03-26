@@ -1363,7 +1363,7 @@ class LLMEngine:
         # For llm_engine, there is no pipeline parallel support, so the engine
         # used is always 0.
         virtual_engine = 0
-        logger.info(f"LLM Engine step block size {self.cache_config.block_size}")
+        # logger.info(f"LLM Engine step block size {self.cache_config.block_size}")
 
         # These are cached outputs from previous iterations. None if on first
         # iteration

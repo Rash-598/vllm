@@ -380,8 +380,8 @@ class Worker(LocalOrDistributedWorkerBase):
         blocks_to_copy = torch.tensor(execute_model_req.blocks_to_copy,
                                       device=self.device,
                                       dtype=torch.int64).view(-1, 2)
-        
-        if not self.use_vmm:
+        # logger.info(f"worker all")
+        if self.use_vmm:
             allocated_block_counts = execute_model_req.allocated_block_counts
             free_buffer_ids = execute_model_req.free_buffer_ids
         else:
@@ -418,6 +418,7 @@ class Worker(LocalOrDistributedWorkerBase):
         if self.use_vmm and worker_input.free_buffer_ids is not None:
             self.cache_engine[virtual_engine].free_seqs(  # type: ignore
                 worker_input.free_buffer_ids)
+        # logger.info(f"vmm: {self.use_vmm}, alloc_block_counts: {worker_input.allocated_block_counts}, ")
         if self.use_vmm and worker_input.allocated_block_counts is not None:
             self.cache_engine[virtual_engine].alloc_seqs(  # type: ignore
                 worker_input.allocated_block_counts)

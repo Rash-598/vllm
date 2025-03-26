@@ -2218,7 +2218,6 @@ def bind_kv_cache(
         ctx: dict[str, Any],
         kv_cache: list[list[torch.Tensor]],  # [virtual_engine][layer_index]
 ) -> None:
-    logger.info(f"KV cache type {type(kv_cache)}")
     # Bind the kv_cache tensor to Attention modules, similar to
     # ctx[layer_name].kv_cache[ve]=kv_cache[ve][extract_layer_index(layer_name)]
     # Special things handled here:

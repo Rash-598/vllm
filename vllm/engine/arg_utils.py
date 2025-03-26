@@ -124,7 +124,7 @@ class EngineArgs:
     block_size: Optional[int] = 16
     # new add for vmm
     block_bytes_size: Optional[int] = 2 * MiB_bytes
-    use_vmm: Optional[bool] = True
+    use_vmm: Optional[bool] = False
 
     enable_prefix_caching: Optional[bool] = None
     disable_sliding_window: bool = False
@@ -1315,6 +1315,7 @@ class EngineArgs:
             enable_prefix_caching=self.enable_prefix_caching,
             cpu_offload_gb=self.cpu_offload_gb,
             use_vmm=self.use_vmm,
+            block_bytes_size=self.block_bytes_size,
             calculate_kv_scales=self.calculate_kv_scales,
         )
         logger.info(f"Engine cache block size {cache_config.block_size} ")

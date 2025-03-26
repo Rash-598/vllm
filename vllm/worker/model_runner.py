@@ -515,9 +515,9 @@ class ModelInputForGPUBuilder(ModelRunnerInputBuilderBase[ModelInputForGPU]):
         # the current sequence group.
         self.inter_data_list: List[
             ModelInputForGPUBuilder.InterDataForSeqGroup] = []
-        logger.info(
-            f"Class {self.attn_metadata_builder}"
-        )
+        # logger.info(
+        #     f"Class {self.attn_metadata_builder}"
+        # )
         self.attn_metadata_builder.prepare()
 
     def _compute_lens(self, inter_data: InterDataForSeqGroup, seq_idx: int,
@@ -867,12 +867,12 @@ class ModelInputForGPUBuilder(ModelRunnerInputBuilderBase[ModelInputForGPU]):
         input_tokens = []
         token_types = []
         for inter_data in self.inter_data_list:
-            logger.info(f"request id: {inter_data.request_id} inter data input tokens list {len(inter_data.input_tokens)}")
+            # logger.info(f"request id: {inter_data.request_id} inter data input tokens list {len(inter_data.input_tokens)}")
             for cur_input_tokens in inter_data.input_tokens:
                 input_tokens.extend(cur_input_tokens)
             for cur_token_types in inter_data.token_types:
                 token_types.extend(cur_token_types)
-        logger.info(f"flatten input tokens {len(input_tokens)}")
+        # logger.info(f"flatten input tokens {len(input_tokens)}")
         if not input_tokens:
             # This may happen when all prefill requests hit
             # prefix caching and there is no decode request.

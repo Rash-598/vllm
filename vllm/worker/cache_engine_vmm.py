@@ -53,6 +53,7 @@ class CacheEngineVMM:
         self.block_bytes_size = self.cache_config.block_bytes_size
         self.num_gpu_blocks = cache_config.num_gpu_blocks
         self.num_cpu_blocks = cache_config.num_cpu_blocks
+        logger.info(f"VMM num_gpu_blocks: {self.num_gpu_blocks}")
 
         if cache_config.cache_dtype == "auto":
             self.dtype = model_config.dtype
@@ -75,15 +76,34 @@ class CacheEngineVMM:
         self.sequence_buffer_size = self.max_seq_len * self.token_size
         self.sequence_buffer_bytes_size = (self.sequence_buffer_size *
                                            self.dtype_size)
+        # log the calculation of sequence buffer bytes size
+        logger.info(
+            "VMM sequence_buffer_bytes_size: %d = %d * %d * %d",
+            self.sequence_buffer_bytes_size, self.max_seq_len,
+            self.token_size, self.dtype_size)
 
         self.cache_space_size = self.num_layers * self.sequence_buffer_size
+        # log the calculation of cache space size
+        logger.info(
+            "VMM cache_space_size: %d = %d * %d",
+            self.cache_space_size, self.num_layers,
+            self.sequence_buffer_size)
         self.cache_sapce_bytes_size = self.cache_space_size * self.dtype_size
+        # log the calculation of cache space bytes size
+        logger.info(
+            "VMM cache_space_bytes_size: %d = %d * %d",
+            self.cache_sapce_bytes_size, self.cache_space_size, self.dtype_size,)
 
         assert self.cache_sapce_bytes_size % self.block_bytes_size == 0, \
             "cache_sapce_bytes_size must be divisible by block_bytes_size"
 
         self.cache_space_page_num = (self.cache_sapce_bytes_size //
                                      self.block_bytes_size)
+        # log the calculation of cache space page num
+        logger.info(
+            "VMM cache_space_page_num: %d = %d / %d",
+            self.cache_space_page_num, self.cache_sapce_bytes_size,
+            self.block_bytes_size)
 
         logger.info(
             "CacheEngineVMM basic info: { block_size: %d, block_bytes_size: %d dtype_size: %d, "
@@ -126,11 +146,11 @@ class CacheEngineVMM:
         
         # TODO: Implement CPU cache and swap
         # self.cpu_cache = self._allocate_kv_cache(self.num_cpu_blocks, "cpu")
+        # raise RuntimeError("Recheck")
 
     def _reserve_gpu_kv_cache(self) -> List[vmm.CacheDevicePtr]:
         key_ptr = vmm.CacheDevicePtr()
         value_ptr = vmm.CacheDevicePtr()
-
         if (self.device_cache_allocator.reserve_cache_ptr(
                 key_ptr, self.max_batch_size * self.cache_space_page_num) !=
                 0):
@@ -217,6 +237,8 @@ class CacheEngineVMM:
                 offset = (start_offset +
                           allocated_blocks * self.block_bytes_size)
                 self.alloc_one_seq(buffer_id, num_blocks, offset)
+                # logger.info(f"VMM Alloc: buffer_id: {buffer_id}, num_blocks: {num_blocks}, offset: {offset}")
+                # logger.info(f"allocated_block_counts: {len(self.allocated_block_counts)}")
                 # logger.info(
                 #     "VMM Alloc: buffer_id: %d, num_blocks: %d, "
                 #     "allocated_block_counts: %s", buffer_id, num_blocks,

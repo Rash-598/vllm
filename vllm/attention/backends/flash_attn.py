@@ -427,7 +427,7 @@ class FlashAttentionMetadataBuilder(
         self.block_size = input_builder.block_size
 
     def prepare(self):
-        logger.info("Preparing FlashAttention metadata")
+        # logger.info("Preparing FlashAttention metadata")
         self.slot_mapping: List[int] = []
         self.prefill_seq_lens: List[int] = []
         self.context_lens: List[int] = []
@@ -896,6 +896,7 @@ class FlashAttentionImpl(AttentionImpl):
         query = query[:num_prefill_query_tokens]
         prefill_output = output[:num_prefill_query_tokens]
         assert query.shape[0] == num_prefill_query_tokens
+        # logger.info(f"decode_query shape {decode_query.shape[0]} num_decode_query_tokens {num_decode_query_tokens}")
         assert decode_query.shape[0] == num_decode_query_tokens
 
         if prefill_meta := attn_metadata.prefill_metadata:

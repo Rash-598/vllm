@@ -67,9 +67,11 @@ void CacheAllocator::setPageSize(int64_t num) { pageSize = num * granularity; }
 // reserve function, reserve virtual address space
 int64_t CacheAllocator::reserveCachePtr(
     const c10::intrusive_ptr<CacheDevicePtr>& ptr, int64_t pageNum) {
+  printf("reserveCachePtr, pageNum: %ld\n", pageNum);
   if (pageNum == 0) {
     return CUDA_SUCCESS;
   }
+
   size_t size = pageNum * pageSize;
   auto status = cuMemAddressReserve(&(ptr->dptr), size, 0, 0, 0);
 
@@ -87,6 +89,7 @@ int64_t CacheAllocator::reserveCachePtr(
 int64_t CacheAllocator::allocCachePtr(
     const c10::intrusive_ptr<CacheDevicePtr>& ptr, int64_t pageNum,
     int64_t offset) {
+  // printf("allocCachePtr, pageNum: %ld, offset: %ld\n", pageNum, offset);
   if (pageNum == 0) {
     return CUDA_SUCCESS;
   }
@@ -110,6 +113,7 @@ int64_t CacheAllocator::allocCachePtr(
     }
     // always release the handle, but the memory is still can access util
     // cuMemUnmap
+    // printf("Offset: %ld, Allocated page num: %ld\n", start_dptr, ptr->allocatedPageNum);
     cuMemRelease(allocationHandle);
   } else {
     printf("cuMemCreate failed!, err code: %d\n", status);

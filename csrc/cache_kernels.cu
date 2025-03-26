@@ -364,17 +364,24 @@ __global__ void reshape_and_cache_vmm_kernel(
                                                     // key/value write to which
                                                     // token col in cache
     const int64_t cache_batch_stride, const int64_t cache_token_stride,
-    const int64_t key_stride, const int64_t value_stride, const int num_heads,
-    const int head_size) {
+    const int64_t key_stride, const int64_t value_stride, 
+    const int num_heads,
+    const int head_size,
+    const int max_batch_size, 
+    const int max_seq_len, 
+    const int num_tokens) {
   const int64_t token_idx = blockIdx.x;
   // // NOTE: cache_cow_idx or cache_col_idx can be -1 if the token is padded
   const int64_t cache_cow_idx = cache_cow_mapping[token_idx];
   const int64_t cache_col_idx = cache_col_mapping[token_idx];
+  // assert(token_idx == cache_col_idx);
   if (cache_cow_idx < 0 || cache_col_idx < 0) {
     return;
   }
 
   const int n = num_heads * head_size;
+  // printf("token_idx: %ld, cache_cow_idx: %ld, cache_col_idx: %ld\n",
+        //  token_idx, cache_cow_idx, cache_col_idx);
   for (int i = threadIdx.x; i < n; i += blockDim.x) {
     const int64_t src_key_idx = token_idx * key_stride + i;
     const int64_t src_value_idx = token_idx * value_stride + i;
@@ -386,7 +393,20 @@ __global__ void reshape_and_cache_vmm_kernel(
       printf("[ERROR] Invalid index! src_key_idx: %ld, src_value_idx: %ld, tgt_idx: %ld\n",
             src_key_idx, src_value_idx, tgt_idx);
     }
-
+    // // Ensure source indices are within range
+    // if (src_key_idx >= num_tokens * key_stride || src_value_idx >= num_tokens * value_stride) {
+    //     printf("[ERROR] src index out of bounds! src_key_idx=%ld, src_value_idx=%ld, token_idx=%ld, dim=%ld\n", 
+    //           src_key_idx, src_value_idx, token_idx, i);
+    //     return;
+    // }
+    // // Ensure target index is within cache bounds
+    // if (tgt_idx >= max_batch_size * max_seq_len * num_heads * head_size) {
+    //     printf("[ERROR] tgt_idx out of bounds: %ld, cache_cow_idx=%ld, cache_col_idx=%ld, dim=%ld\n", tgt_idx, cache_cow_idx, cache_col_idx, i);
+    //     printf("[ERROR] cache_batch_stride=%ld, cache_token_stride=%ld, num_heads=%d, head_size=%d\n", 
+    //           cache_batch_stride, cache_token_stride, num_heads, head_size);
+    //     return;
+    // }
+    // // printf("Checks passed successfully\n");
     k_cache[tgt_idx] = key[src_key_idx];
     v_cache[tgt_idx] = value[src_value_idx];
   }
@@ -564,6 +584,8 @@ int64_t key_stride = key.stride(0);
 int64_t value_stride = value.stride(0);
 int64_t cache_batch_stride = k_cache.stride(0);
 int64_t cache_token_stride = k_cache.stride(1);
+int64_t max_batch_size = k_cache.size(0);
+int64_t max_seq_len = k_cache.size(1);
 TORCH_CHECK(k_cache.stride(0) == v_cache.stride(0));
 TORCH_CHECK(k_cache.stride(1) == v_cache.stride(1));
 
@@ -581,7 +603,7 @@ VLLM_DISPATCH_FLOATING_TYPES(
               cache_cow_mapping.data_ptr<int32_t>(),
               cache_col_mapping.data_ptr<int32_t>(), cache_batch_stride,
               cache_token_stride, key_stride, value_stride, num_heads,
-              head_size);
+              head_size, max_batch_size, max_seq_len, num_tokens);
     });
 }
 
