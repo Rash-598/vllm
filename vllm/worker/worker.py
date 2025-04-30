@@ -348,6 +348,10 @@ class Worker(LocalOrDistributedWorkerBase):
         logger.info(f"enforce eager: {self.model_config.enforce_eager}")
         if not self.model_config.enforce_eager:
             self.model_runner.capture_model(self.gpu_cache)
+        if self.use_vmm:
+            for ve in range(self.parallel_config.pipeline_parallel_size):
+                free_buffer_ids = [i for i in range(self.cache_engine[ve].max_batch_size)]
+                self.cache_engine[ve].free_seqs(free_buffer_ids)
         # Reset the seed to ensure that the random state is not affected by
         # the model initialization and profiling.
         set_random_seed(self.model_config.seed)
@@ -382,9 +386,11 @@ class Worker(LocalOrDistributedWorkerBase):
                                       dtype=torch.int64).view(-1, 2)
         # logger.info(f"worker all")
         if self.use_vmm:
+            prefix_block_counts = execute_model_req.prefix_block_counts
             allocated_block_counts = execute_model_req.allocated_block_counts
             free_buffer_ids = execute_model_req.free_buffer_ids
         else:
+            prefix_block_counts = None
             allocated_block_counts = None
             free_buffer_ids = None
 
@@ -395,6 +401,7 @@ class Worker(LocalOrDistributedWorkerBase):
             blocks_to_copy=blocks_to_copy,
             virtual_engine=virtual_engine,
             num_steps=num_steps,
+            prefix_block_counts=prefix_block_counts,
             allocated_block_counts=allocated_block_counts,
             free_buffer_ids=free_buffer_ids
         )
@@ -419,9 +426,13 @@ class Worker(LocalOrDistributedWorkerBase):
             self.cache_engine[virtual_engine].free_seqs(  # type: ignore
                 worker_input.free_buffer_ids)
         # logger.info(f"vmm: {self.use_vmm}, alloc_block_counts: {worker_input.allocated_block_counts}, ")
-        if self.use_vmm and worker_input.allocated_block_counts is not None:
-            self.cache_engine[virtual_engine].alloc_seqs(  # type: ignore
-                worker_input.allocated_block_counts)
+        if self.use_vmm and (worker_input.allocated_block_counts is not None or worker_input.prefix_block_counts is not None):
+            self.cache_engine[virtual_engine].alloc_seqs_with_prefix(
+                worker_input.prefix_block_counts,
+                worker_input.allocated_block_counts,
+            )
+            # self.cache_engine[virtual_engine].alloc_seqs(  # type: ignore
+            #     worker_input.allocated_block_counts)
 
     def _get_cached_seq_group_metadata(
             self,

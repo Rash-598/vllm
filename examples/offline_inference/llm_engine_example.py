@@ -9,9 +9,25 @@ from vllm.utils import FlexibleArgumentParser
 def create_test_prompts() -> list[tuple[str, SamplingParams]]:
     """Create a list of test prompts with their sampling parameters."""
     return [
-        ("A robot may not injure a human being",
+        ("You are an expert school principal, skilled in effectively managing "
+    "faculty and staff. Draft 10-15 questions for a potential first grade "
+    "Head Teacher for my K-12, all-girls', independent school that emphasizes "
+    "community, joyful discovery, and life-long learning. The candidate is "
+    "coming in for a first-round panel interview for a 8th grade Math "
+    "teaching role. They have 5 years of previous teaching experience "
+    "as an assistant teacher at a co-ed, public school with experience "
+    "in middle school math teaching. Based on these information, fulfill "
+    "the following paragraph: Hello my name is",
          SamplingParams(temperature=0.0, logprobs=1, prompt_logprobs=1)),
-        ("What is the meaning of life?",
+        ("You are an expert school principal, skilled in effectively managing "
+    "faculty and staff. Draft 10-15 questions for a potential first grade "
+    "Head Teacher for my K-12, all-girls', independent school that emphasizes "
+    "community, joyful discovery, and life-long learning. The candidate is "
+    "coming in for a first-round panel interview for a 8th grade Math "
+    "teaching role. They have 5 years of previous teaching experience "
+    "as an assistant teacher at a co-ed, public school with experience "
+    "in middle school math teaching. Based on these information, fulfill "
+    "the following paragraph: The future of AI is",
          SamplingParams(temperature=0.0, logprobs=1, prompt_logprobs=1)),
         # ("To be or not to be,",
         #  SamplingParams(temperature=0.8, top_k=5, presence_penalty=0.2)),
@@ -38,7 +54,7 @@ def process_requests(engine: LLMEngine,
 
         for request_output in request_outputs:
             if request_output.finished:
-                print(request_output)
+                print(request_output.outputs[0])
 
 
 def initialize_engine(args: argparse.Namespace) -> LLMEngine:

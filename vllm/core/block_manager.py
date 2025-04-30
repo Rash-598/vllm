@@ -165,6 +165,16 @@ class SelfAttnBlockSpaceManager(BlockSpaceManager):
     def allocate(self, seq_group: SequenceGroup) -> None:
 
         # Allocate self-attention block tables for decoder sequences
+        import inspect
+        stack = inspect.stack()
+        if len(stack) > 1:
+            caller = stack[1]
+            filename = caller.filename
+            line_number = caller.lineno
+            function_name = caller.function
+            print(
+                f"{function_name} "
+                f"({filename}:{line_number})")
         waiting_seqs = seq_group.get_seqs(status=SequenceStatus.WAITING)
         assert not (set(seq.seq_id for seq in waiting_seqs)
                     & self.block_tables.keys()), "block table already exists"
@@ -172,6 +182,9 @@ class SelfAttnBlockSpaceManager(BlockSpaceManager):
         # NOTE: Here we assume that all sequences in the group have the same
         # prompt.
         seq = waiting_seqs[0]
+        print(
+            f"Allocating block table for seq {seq.seq_id} with "
+            f"{len(seq.get_token_ids())} tokens")
         block_table: BlockTable = self._allocate_sequence(seq)
         self.block_tables[seq.seq_id] = block_table
 
@@ -237,9 +250,21 @@ class SelfAttnBlockSpaceManager(BlockSpaceManager):
         seq: Sequence,
         num_lookahead_slots: int,
     ) -> List[Tuple[int, int]]:
-
+        import inspect
+        stack = inspect.stack()
+        if len(stack) > 1:
+            caller = stack[1]
+            filename = caller.filename
+            line_number = caller.lineno
+            function_name = caller.function
+            print(
+                f"{function_name} "
+                f"({filename}:{line_number})")
         block_table = self.block_tables[seq.seq_id]
-
+        unseen_tokens = block_table.get_unseen_token_ids(seq.get_token_ids())
+        print(
+            f"Appending {len(unseen_tokens)} tokens to block table for seq "
+            f"{seq.seq_id}")
         block_table.append_token_ids(
             token_ids=block_table.get_unseen_token_ids(seq.get_token_ids()),
             num_lookahead_slots=num_lookahead_slots,
@@ -318,6 +343,7 @@ class SelfAttnBlockSpaceManager(BlockSpaceManager):
         sequences in the sequence group.
         """
         computed_seq_block_ids = []
+        print(f"get_common_computed_block_ids: {len(seqs)}")
         for seq in seqs:
             all_blocks = self.block_tables[seq.seq_id].physical_block_ids
             num_cached_tokens = (
@@ -517,4 +543,14 @@ class SelfAttnBlockSpaceManager(BlockSpaceManager):
         """Get the number of tokens in blocks that are already computed and
         cached in the block manager for the sequence.
         """
+        import inspect
+        stack = inspect.stack()
+        if len(stack) > 1:
+            caller = stack[1]
+            filename = caller.filename
+            line_number = caller.lineno
+            function_name = caller.function
+            print(
+                f"{function_name} "
+                f"({filename}:{line_number})")
         return self._computed_blocks_tracker.get_num_cached_tokens(seq)

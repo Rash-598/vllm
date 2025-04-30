@@ -59,7 +59,6 @@ class CacheEngine:
                                              self.block_size,
                                              model_config.is_attention_free,
                                              use_mla=model_config.use_mla)
-
         # Initialize the cache.
         logger.info(f"Before Free GPU memory: {torch.cuda.mem_get_info()}")
         self.gpu_cache = self._allocate_kv_cache(

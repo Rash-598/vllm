@@ -5,7 +5,7 @@ from typing import Dict, FrozenSet, List, Optional, Tuple
 from vllm.core.block.interfaces import (Block, BlockAllocator, BlockId,
                                         DeviceAwareBlockAllocator)
 from vllm.core.block.naive_block import NaiveBlock, NaiveBlockAllocator
-from vllm.core.block.prefix_caching_block import PrefixCachingBlockAllocator
+from vllm.core.block.prefix_caching_block import PrefixCachingBlockAllocator, PrefixCachingBufferAllocator
 from vllm.platforms import current_platform
 from vllm.utils import Device
 
@@ -28,6 +28,7 @@ class CpuGpuBlockAllocator(DeviceAwareBlockAllocator):
         num_gpu_blocks: int,
         num_cpu_blocks: int,
         block_size: int,
+        vmm: bool = False
     ) -> DeviceAwareBlockAllocator:
         """Creates a CpuGpuBlockAllocator instance with the specified
         configuration.
@@ -78,11 +79,18 @@ class CpuGpuBlockAllocator(DeviceAwareBlockAllocator):
                 block_ids=cpu_block_ids,
             )
         elif allocator_type == "prefix_caching":
-            gpu_allocator = PrefixCachingBlockAllocator(
-                num_blocks=num_gpu_blocks,
-                block_size=block_size,
-                block_ids=gpu_block_ids,
-            )
+            print(f"Use prefix caching with {vmm}")
+            if vmm:
+                gpu_allocator = PrefixCachingBufferAllocator(
+                    num_blocks=num_gpu_blocks,
+                    block_size=block_size
+                )
+            else:
+                gpu_allocator = PrefixCachingBlockAllocator(
+                    num_blocks=num_gpu_blocks,
+                    block_size=block_size,
+                    block_ids=gpu_block_ids,
+                )
 
             cpu_allocator = PrefixCachingBlockAllocator(
                 num_blocks=num_cpu_blocks,
@@ -126,7 +134,8 @@ class CpuGpuBlockAllocator(DeviceAwareBlockAllocator):
     def allocate_mutable_block(self,
                                prev_block: Optional[Block],
                                device: Device,
-                               extra_hash: Optional[int] = None) -> Block:
+                               extra_hash: Optional[int] = None,
+                               buffer_id=None) -> Block:
         """Allocates a new mutable block on the specified device.
 
         Args:
@@ -140,6 +149,9 @@ class CpuGpuBlockAllocator(DeviceAwareBlockAllocator):
         Returns:
             Block: The newly allocated mutable block.
         """
+        if buffer_id is not None:
+            return self._allocators[device].allocate_mutable_block(
+                prev_block, buffer_id=buffer_id, extra_hash=extra_hash)
         return self._allocators[device].allocate_mutable_block(
             prev_block, extra_hash=extra_hash)
 
@@ -148,6 +160,7 @@ class CpuGpuBlockAllocator(DeviceAwareBlockAllocator):
             prev_block: Optional[Block],
             block_token_ids: List[List[int]],
             device: Device,
+            buffer_id=None,
             extra_hash: Optional[int] = None) -> List[Block]:
         """Allocates a new group of immutable blocks with the provided block 
         token IDs on the specified device.
@@ -166,6 +179,10 @@ class CpuGpuBlockAllocator(DeviceAwareBlockAllocator):
             List[Block]: The newly allocated list of immutable blocks 
                 containing the provided block token IDs.
         """
+        if buffer_id is not None:
+            return self._allocators[device].allocate_immutable_blocks(
+                prev_block, buffer_id=buffer_id, block_token_ids=block_token_ids,
+                extra_hash=extra_hash)
         return self._allocators[device].allocate_immutable_blocks(
             prev_block, block_token_ids, extra_hash=extra_hash)
 

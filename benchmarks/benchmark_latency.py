@@ -78,6 +78,7 @@ def main(args: argparse.Namespace):
             )
 
     def run_to_completion(profile_dir: Optional[str] = None):
+        print(f"profile_dir: {profile_dir}")
         if profile_dir:
             with torch.profiler.profile(
                     activities=[
@@ -136,9 +137,9 @@ if __name__ == "__main__":
     parser = FlexibleArgumentParser(
         description="Benchmark the latency of processing a single batch of "
         "requests till completion.")
-    parser.add_argument("--input-len", type=int, default=32)
-    parser.add_argument("--output-len", type=int, default=128)
-    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--input-len", type=int, default=1024)
+    parser.add_argument("--output-len", type=int, default=2)
+    parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument(
         "--n",
         type=int,

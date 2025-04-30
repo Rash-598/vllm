@@ -369,12 +369,14 @@ class NaiveBlock(Block):
                  block_size: int,
                  allocator: BlockAllocator,
                  block_id: Optional[int] = None,
+                 vm_block_id: Optional[Tuple[int,int]] = None,
                  _cow_target: Optional[Block] = None,
                  extra_hash: Optional[int] = None):
         self._token_ids: List[int] = []
         self._block_size = block_size
         self._prev_block = prev_block
         self._block_id = block_id
+        self._vm_block_id = vm_block_id
         self._allocator = allocator
         self._cow_target = _cow_target if _cow_target is not None else self
 
@@ -430,6 +432,14 @@ class NaiveBlock(Block):
     @block_id.setter
     def block_id(self, value: Optional[int]) -> None:
         self._block_id = value
+    
+    @property
+    def vm_block_id(self) -> Optional[Tuple[int, int]]:
+        return self._vm_block_id
+
+    @vm_block_id.setter
+    def vm_block_id(self, value) -> None:
+        self._vm_block_id = value
 
     @property
     def is_full(self) -> bool:

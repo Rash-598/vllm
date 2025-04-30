@@ -156,6 +156,7 @@ class SchedulerOutputs:
     running_queue_size: int
     preempted: int
     # new add for vmm
+    prefix_block_counts: Dict[int, Tuple[int, int]] = field(default_factory=dict)
     allocated_block_counts: Dict[int, int] = field(default_factory=dict)
     free_buffer_ids: List[int] = field(default_factory=list)
 
@@ -464,6 +465,16 @@ class Scheduler:
 
         # Create the block space manager.
         logger.info(f"Scheduler block size {self.cache_config.block_size}")
+        import inspect
+        stack = inspect.stack()
+        if len(stack) > 1:
+            caller = stack[1]
+            filename = caller.filename
+            line_number = caller.lineno
+            function_name = caller.function
+            logger.info(
+                f"{function_name} "
+                f"({filename}:{line_number})")
         if cache_config.use_vmm:
             self.block_manager = BlockSpaceManagerImpl(
                 block_size=self.cache_config.block_size,
@@ -1078,6 +1089,17 @@ class Scheduler:
         Returns:
             SchedulerPrefillOutputs.
         """
+
+        import inspect
+        stack = inspect.stack()
+        if len(stack) > 1:
+            caller = stack[1]
+            filename = caller.filename
+            line_number = caller.lineno
+            function_name = caller.function
+            logger.info(
+                f"{function_name} "
+                f"({filename}:{line_number})")
         if budget.remaining_token_budget() == 0:
             # Do nothing: Can't add any more prefill anyway
             return SchedulerPrefillOutputs(
@@ -1523,7 +1545,7 @@ class Scheduler:
         now = time.time()
 
         if self.use_vmm:
-            scheduler_outputs.allocated_block_counts, \
+            scheduler_outputs.prefix_block_counts, scheduler_outputs.allocated_block_counts, \
                 scheduler_outputs.free_buffer_ids = self.block_manager.step()
 
         if not self.cache_config.enable_prefix_caching:
@@ -1554,8 +1576,7 @@ class Scheduler:
                 encoder_seq = seq_group.get_encoder_seq()
                 assert encoder_seq is not None
                 encoder_seq_data = encoder_seq.data
-                # Block table for cross-attention
-                # Also managed at SequenceGroup level
+                # Block table for cross-attention                # Also managed at SequenceGroup level
                 cross_block_table = self.block_manager.get_cross_block_table(
                     seq_group)
             else:
@@ -1566,20 +1587,21 @@ class Scheduler:
                 # logger.info(f"""
                 #     Step 1
                 #     Scheduling seq_id {seq.seq_id} with token_chunk_size {token_chunk_size} 
-                #     and block_size {seq.block_size}
-                #     data {seq.data}"""
+                #     and block_size {seq.block_size}"""
                 # )            
                 seq_id = seq.seq_id
                 seq_data[seq_id] = seq.data
                 if not self.use_vmm:
                     block_tables[seq_id] = self.block_manager.get_block_table(
                         seq)
+                    logger.info(f"Scheduler block_tables {block_tables[seq_id]}")
                     self.block_manager.access_all_blocks_in_seq(seq, now)
 
             if self.cache_config.enable_prefix_caching:
                 common_computed_block_nums = (
                     self.block_manager.get_common_computed_block_ids(
                         seq_group.get_seqs(status=SequenceStatus.RUNNING)))
+                logger.info(f"Scheduler common_computed_block_nums: {len(common_computed_block_nums)}")
 
             do_sample = True
             is_prompt = seq_group.is_prefill()
@@ -1957,6 +1979,16 @@ class Scheduler:
             tokens to schedule. The second int is the number of cached tokens.
             If no more new tokens can be scheduled, returns (0, 0).
         """
+        import inspect
+        stack = inspect.stack()
+        if len(stack) > 1:
+            caller = stack[1]
+            filename = caller.filename
+            line_number = caller.lineno
+            function_name = caller.function
+            logger.info(
+                f"{function_name} "
+                f"({filename}:{line_number})")
         num_cached_new_tokens = 0
         num_uncached_new_tokens = 0
 
@@ -1971,6 +2003,7 @@ class Scheduler:
                 continue
 
             num_computed_tokens_seq = seq.get_num_computed_tokens()
+            logger.info(f"Scheduler num_computed_tokens_seq: {num_computed_tokens_seq}")
             all_num_new_tokens_seq = seq.get_len() - num_computed_tokens_seq
             if not self.cache_config.enable_prefix_caching:
                 # If prefix caching is not enabled, all new tokens are uncached.
@@ -1983,6 +2016,7 @@ class Scheduler:
             # guaranteed to be allocated later if the sequence can be allocated.
             num_cached_tokens_seq = self.block_manager.get_num_cached_tokens(
                 seq)
+            logger.info(f"Scheduler num_cached_tokens_seq: {num_cached_tokens_seq}")
 
             # Sanity check.
             if num_cached_tokens_seq < num_computed_tokens_seq:

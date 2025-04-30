@@ -15,7 +15,8 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, m) {
       .def("reserveCachePtr", &CacheAllocator::reserveCachePtr)
       .def("allocCachePtr", &CacheAllocator::allocCachePtr)
       .def("freeCachePtr", &CacheAllocator::freeCachePtr)
-      .def("releaseCachePtr", &CacheAllocator::releaseCachePtr);
+      .def("releaseCachePtr", &CacheAllocator::releaseCachePtr)
+      .def("checkAllocHandle", &CacheAllocator::checkAllocHandle);
 
   // other util functions bind
   m.def("wrap_cache_ptr_to_tensor", &wrap_cache_ptr_to_tensor);

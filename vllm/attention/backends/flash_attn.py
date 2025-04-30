@@ -754,7 +754,7 @@ class FlashAttentionImpl(AttentionImpl):
               We use torch's .expand() to avoid duplicating values
         """
         assert output is not None, "Output tensor must be provided."
-
+        # logger.info(f"FlashAttentionImpl forward: {query.shape}")
         # NOTE(woosuk): FlashAttention2 does not support FP8 KV cache.
         if self.vllm_flash_attn_version < 3 or output.dtype != torch.bfloat16:
             assert (
@@ -788,7 +788,7 @@ class FlashAttentionImpl(AttentionImpl):
         if kv_cache_numel > 0:
             key_cache = kv_cache[0]
             value_cache = kv_cache[1]
-            # logger.info(f"key_cache shape {key_cache.shape} value_cache shape {value_cache.shape}")
+            # logger.info(f"VMM shapes key {key.shape} value {value.shape} key_cache {key_cache.shape} value_cache {value_cache.shape}")
             # We skip updating the KV cache under two conditions:
             #  a. When the Attention Type is ENCODER. In this phase, we compute
             #     only the encoder attention without updating the cache.
@@ -890,6 +890,10 @@ class FlashAttentionImpl(AttentionImpl):
         (num_prefill_query_tokens, num_prefill_kv_tokens,
         num_decode_query_tokens) = \
             get_num_prefill_decode_query_kv_tokens(attn_metadata, attn_type)
+        # logger.info(
+        #     f"num_prefill_query_tokens {num_prefill_query_tokens} "
+        #     f"num_prefill_kv_tokens {num_prefill_kv_tokens} "
+        #     f"num_decode_query_tokens {num_decode_query_tokens}")
         decode_query = query[num_prefill_query_tokens:]
         decode_output = output[num_prefill_query_tokens:]
         # QKV for prefill.

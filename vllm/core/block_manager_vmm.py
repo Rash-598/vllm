@@ -1,14 +1,21 @@
+import sys
+from bisect import bisect_left
 from collections import deque
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, FrozenSet, Callable
 from typing import Sequence as GenericSequence
+from vllm.core.block.interfaces import Block
 from vllm.core.block.utils import check_no_caching_or_swa_for_blockmgr_encdec
 from vllm.core.interfaces import AllocStatus, BlockSpaceManager
 from vllm.logger import init_logger
 from vllm.sequence import Sequence, SequenceGroup, SequenceStatus
 from vllm.utils import Counter, Device
+from vllm.core.block.cpu_gpu_block_allocator import CpuGpuBlockAllocator
+from vllm.core.block.prefix_caching_block import (ComputedBlocksTracker,
+                                                  LastAccessBlocksTracker)
+from vllm.utils import Device, cdiv, chunk_list
 
 logger = init_logger(__name__)
-
+SeqId = int
 
 class CacheBufferAllocator:
 
@@ -47,10 +54,10 @@ class BlockSpaceManagerVMM(BlockSpaceManager):
         num_cache_buffers: int = 0,
     ) -> None:
 
-        if enable_caching or (sliding_window is not None):
-            raise NotImplementedError(
-                "Prefix Caching or Sliding window is not supported in VMM now."
-            )
+        # if enable_caching or (sliding_window is not None):
+        #     raise NotImplementedError(
+        #         "Prefix Caching or Sliding window is not supported in VMM now."
+        #     )
         self.enable_caching = enable_caching
         self.block_size = block_size
         self.num_total_gpu_blocks = num_gpu_blocks
@@ -62,12 +69,25 @@ class BlockSpaceManagerVMM(BlockSpaceManager):
         self.num_cache_buffers = num_cache_buffers
         # use to alloc cache buffer id for seq
         self.gpu_allocator = CacheBufferAllocator(num_cache_buffers)
+        self.block_allocator = CpuGpuBlockAllocator.create(
+            allocator_type="prefix_caching" if enable_caching else "naive",
+            num_gpu_blocks=num_gpu_blocks,
+            num_cpu_blocks=num_cpu_blocks,
+            block_size=block_size,
+            vmm=True,
+        )
+        self._computed_blocks_tracker = ComputedBlocksTracker(
+            self.block_allocator, self.block_size, self.enable_caching)
+        self._last_access_blocks_tracker = LastAccessBlocksTracker(
+            self.block_allocator)
 
         self.watermark = watermark
         assert watermark >= 0.0
         self.watermark_blocks = int(watermark * num_gpu_blocks)
 
-        # Mapping from cache buffer ID to the number of allocated blocks.
+        # Mapping from seq_id to the number of allocated blocks.
+        self.block_tables: Dict[SeqId, List[Block]] = {}
+        self.prefix_block_counts: Dict[int, Tuple[int, int]] = {}
         self.allocated_block_counts: List[int] = [
             0 for _ in range(num_cache_buffers)
         ]
@@ -77,12 +97,12 @@ class BlockSpaceManagerVMM(BlockSpaceManager):
         self.free_buffer_ids: List[int] = []
         self.free_latency: int = 10
         self.iter_counter = Counter()
-
-        self.init_alloc()
+        # self.init_alloc()
 
     def init_alloc(self) -> None:
         # we init alloc one block for warp in cache_engine_vmm
         # and add this init buffers to waiting_free_buffers
+        logger.info("VMM init alloc for BlockSpaceManagerVMM")
         for _ in range(self.num_cache_buffers):
             buffer_id = self.gpu_allocator.allocate()
             self.allocated_block_counts[buffer_id] = 1
@@ -106,6 +126,9 @@ class BlockSpaceManagerVMM(BlockSpaceManager):
         else:
             n = seq.n_blocks
             remain_slots = n * self.block_size - seq.get_len()
+            logger.info(
+                f"seq {seq.seq_id} remain_slots {remain_slots} "
+                f"n_blocks {n} block_size {self.block_size}")
             predict_gen_len = self.predict_gen_len(seq)
             if predict_gen_len > remain_slots:
                 n += (predict_gen_len - remain_slots + self.block_size -
@@ -120,6 +143,7 @@ class BlockSpaceManagerVMM(BlockSpaceManager):
 
         seq = seq_group.get_seqs(status=SequenceStatus.WAITING)[0]
         num_required_blocks = self._get_seq_num_required_blocks(seq)
+        logger.info(f"seq {seq.seq_id} num_required_blocks {num_required_blocks}")
 
         # If the sequence is not allocated yet, its cache_buffer_id must be -1.
         assert seq.cache_buffer_id == -1
@@ -146,14 +170,61 @@ class BlockSpaceManagerVMM(BlockSpaceManager):
         check_no_caching_or_swa_for_blockmgr_encdec(self, seq_group)
 
         seq = seq_group.get_seqs(status=SequenceStatus.WAITING)[0]
+        logger.info(f"seq {seq.seq_id} seq len {seq.get_len()}")
         need_blocks_num = self._get_seq_num_required_blocks(seq)
 
         buffer_id, allocated_num = self._allocate_buffer(need_blocks_num)
+        logger.info(f"seq {seq.seq_id} buffer_id {buffer_id} ")
 
         seq.cache_buffer_id = buffer_id
         seq.data.cache_buffer_id = buffer_id
         self.allocated_block_counts[buffer_id] = allocated_num
         self.modified_block_counts[buffer_id] = allocated_num
+        
+        if not self.enable_caching:
+            return
+        # prefix cache management
+        blocks: List[Block] = []
+        block_token_ids = []
+        tail_token_ids = []
+        for cur_token_ids in chunk_list(seq.get_token_ids(), self.block_size):
+            if len(cur_token_ids) == self.block_size:
+                block_token_ids.append(cur_token_ids)
+            else:
+                tail_token_ids.append(cur_token_ids)
+        prev_block = None
+        # logger.info(f"block_token_ids {block_token_ids} "
+                    # f"tail_token_ids {tail_token_ids}")
+        if block_token_ids:
+            blocks.extend(
+                self.block_allocator.allocate_immutable_blocks(
+                    prev_block,
+                    buffer_id=buffer_id,
+                    block_token_ids=block_token_ids,
+                    device=Device.GPU,
+                    extra_hash=None))
+            prev_block = blocks[-1]
+        
+        if tail_token_ids:
+            assert len(tail_token_ids) == 1
+            cur_token_ids = tail_token_ids[0]
+
+            block: Block = self.block_allocator.allocate_mutable_block(
+                prev_block=prev_block, buffer_id=buffer_id, device=Device.GPU, extra_hash=None)
+            block.append_token_ids(cur_token_ids)
+
+            blocks.append(block)
+        self.block_tables[seq.seq_id] = blocks
+        self.prefix_block_counts[buffer_id] = None
+        prefix_blocks = 0
+        for block in self.block_tables[seq.seq_id]:
+            if block.vm_block_id[0] == buffer_id:
+                break
+            self.prefix_block_counts[buffer_id] = block.vm_block_id
+        if self.prefix_block_counts[buffer_id] is not None:
+            prefix_blocks = self.prefix_block_counts[buffer_id][1] + 1
+        self.num_free_gpu_blocks += prefix_blocks
+        logger.info(f"seq {seq.seq_id} prefix_block_counts {self.prefix_block_counts[buffer_id]} allocated_num {self.allocated_block_counts[buffer_id]}")
 
     def _allocate_buffer(self, need_blocks_num: int) -> Tuple[int, int]:
         if self.waiting_free_buffers:
@@ -219,9 +290,29 @@ class BlockSpaceManagerVMM(BlockSpaceManager):
         buffer_id = seq.cache_buffer_id
         # If the sequence is allocated, its cache_buffer_id must >= 0.
         assert buffer_id >= 0
-        logical_blocks_num = seq.n_blocks
-        allocated_num = self.allocated_block_counts[buffer_id]
+        logger.info(f"Appending 1 tokens to block table for seq "f"{seq.seq_id}")
+        if self.enable_caching:
+            # Prefix cache managment
+            last_token_id = seq.data.get_last_token_id()
+            curr_block = self.block_tables[seq.seq_id][-1]
+            if curr_block.num_empty_slots > 0:
+                curr_block.append_token_ids([last_token_id])
+            else:
+                # Allocate a new block for the new token.
+                new_block: Block = self.block_allocator.allocate_mutable_block(
+                    prev_block=curr_block,
+                    buffer_id=buffer_id,
+                    device=Device.GPU,
+                    extra_hash=None)
+                new_block.append_token_ids([last_token_id])
+                curr_block = new_block
+                self.block_tables[seq.seq_id].append(curr_block)
+
+            logger.info(f"seq {seq.seq_id} seq len {seq.get_len()}: last_token_id {seq.data.get_last_token_id()}: curr_block {curr_block.vm_block_id}: content_hash {curr_block.content_hash}")
         # If we need to allocate a new physical block
+        # memory management
+        allocated_num = self.allocated_block_counts[buffer_id]
+        logical_blocks_num = seq.n_blocks
         if allocated_num < logical_blocks_num:
             # Currently this code only supports adding one physical block
             assert allocated_num == logical_blocks_num - 1
@@ -256,12 +347,18 @@ class BlockSpaceManagerVMM(BlockSpaceManager):
 
     def free(self, seq: Sequence) -> None:
         # Here, we just append free seq to waiting_free_buffers.
+        if self.gpu_allocator.get_num_free_buffers() > 0:
+            return
         waiting_free_id = seq.cache_buffer_id
         if self.allocated_block_counts[waiting_free_id] == 0:
             # Already freed or haven't been scheduled yet.
             return
 
         free_blocks = self.allocated_block_counts[waiting_free_id]
+        exists = any(waiting_free_id == x[0] for x in self.waiting_free_buffers)
+        if exists:
+            return
+        logger.info(f"seq {seq.seq_id} free buffer_id {waiting_free_id}, allocated_num {self.allocated_block_counts[waiting_free_id]}")
         self.waiting_free_buffers.append(
             (waiting_free_id, self.iter_counter.counter))
         self.waiting_free_blocks += free_blocks
@@ -294,7 +391,7 @@ class BlockSpaceManagerVMM(BlockSpaceManager):
 
     def get_common_computed_block_ids(
         self, seqs: List[Sequence]) -> GenericSequence[int]:
-        return None
+        return []
 
     def mark_blocks_as_computed(self, seq_group: SequenceGroup, token_chunk_size: int):
         pass
@@ -316,11 +413,13 @@ class BlockSpaceManagerVMM(BlockSpaceManager):
     def step(self) -> Tuple[Dict[int, int], List[int]]:
         iter = next(self.iter_counter)
         modified_block_counts = self.modified_block_counts
+        prefix_block_counts = self.prefix_block_counts
         free_buffer_ids = self.free_buffer_ids
         self.check_and_free_waiting_buffers(iter)
+        self.prefix_block_counts = {}
         self.modified_block_counts = {}
         self.free_buffer_ids = []
-        return modified_block_counts, free_buffer_ids
+        return prefix_block_counts, modified_block_counts, free_buffer_ids
     
     
     def get_prefix_cache_hit_rate(self, device: Device) -> float:
@@ -334,7 +433,17 @@ class BlockSpaceManagerVMM(BlockSpaceManager):
         )
 
     def get_num_cached_tokens(self, seq: Sequence) -> int:
-        """Get the number of cached tokens for a sequence."""
-        raise NotImplementedError(
-            "Get num cached tokens is not supported in VMM now."
-        )
+        """Get the number of tokens in blocks that are already computed and
+        cached in the block manager for the sequence.
+        """
+        import inspect
+        stack = inspect.stack()
+        if len(stack) > 1:
+            caller = stack[1]
+            filename = caller.filename
+            line_number = caller.lineno
+            function_name = caller.function
+            print(
+                f"{function_name} "
+                f"({filename}:{line_number})")
+        return self._computed_blocks_tracker.get_num_cached_tokens(seq)

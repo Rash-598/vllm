@@ -95,7 +95,7 @@ def nullable_kvs(val: str) -> Optional[Mapping[str, int]]:
 @dataclass
 class EngineArgs:
     """Arguments for vLLM engine."""
-    model: str = 'facebook/opt-125m'
+    model: str = 'meta-llama/Meta-Llama-3-8B'
     served_model_name: Optional[Union[str, List[str]]] = None
     tokenizer: Optional[str] = None
     hf_config_path: Optional[str] = None
@@ -124,7 +124,7 @@ class EngineArgs:
     block_size: Optional[int] = 16
     # new add for vmm
     block_bytes_size: Optional[int] = 2 * MiB_bytes
-    use_vmm: Optional[bool] = False
+    use_vmm: Optional[bool] = True
 
     enable_prefix_caching: Optional[bool] = None
     disable_sliding_window: bool = False

@@ -53,6 +53,12 @@ class CacheAllocator:
                         offset: int = 0) -> int:
         return self._allocator.allocCachePtr(ptr._ptr, page_num, offset)
 
+    def check_alloc_handle(self,
+                        ptr: CacheDevicePtr,
+                        offset: int = 0,
+                        offset2: int = 0) -> None:
+        return self._allocator.checkAllocHandle(ptr._ptr, offset, offset2)
+
     def free_cache_ptr(self, ptr: CacheDevicePtr) -> int:
         return self._allocator.freeCachePtr(ptr._ptr)
 

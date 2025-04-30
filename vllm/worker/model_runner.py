@@ -535,6 +535,7 @@ class ModelInputForGPUBuilder(ModelRunnerInputBuilderBase[ModelInputForGPU]):
         if inter_data.is_prompt:
             context_len = seq_data.get_num_computed_tokens()
             seq_len = min(seq_len, context_len + token_chunk_size)
+            # logger.info(f"request_id: {inter_data.request_id}, context_len: {context_len}, seq_len: {seq_len}")
         elif self.runner.scheduler_config.is_multi_step or \
             self.runner.model_config.is_encoder_decoder:
             context_len = seq_len - 1
@@ -580,13 +581,17 @@ class ModelInputForGPUBuilder(ModelRunnerInputBuilderBase[ModelInputForGPU]):
         If hit, update input tokens and positions to only compute the
         remaining blocks.
         """
+        # logger.info(f"Compute for prefix cache hit, request_id, {inter_data.request_id}, seq_idx {seq_idx}")
         computed_block_nums = inter_data.computed_block_nums
+        # if inter_data.is_prompt:
+        #     logger.info(f"Computed block nums: {computed_block_nums}")
+        #     logger.info(f"sliding_window: {self.sliding_window}")
+        #     logger.info(f"inter_data.is_prompt: {inter_data.is_prompt}")
 
         # Note that prefix caching does not support sliding window.
         prefix_cache_hit = (computed_block_nums is not None
                             and len(computed_block_nums) > 0
                             and self.sliding_window is None
-                            and self.use_vmm is False
                             and inter_data.is_prompt)
         inter_data.prefix_cache_hit = prefix_cache_hit
 
@@ -965,6 +970,7 @@ class ModelInputForGPUBuilder(ModelRunnerInputBuilderBase[ModelInputForGPU]):
             seq_lens.extend(itertools.repeat(1, cuda_graph_pad_size))
 
         # Attention metadata.
+        # logger.info(f"query_lens {query_lens}")
         attn_metadata = self.attn_metadata_builder.build(
             seq_lens, query_lens, cuda_graph_pad_size, batch_size)
 
@@ -1747,6 +1753,7 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
         num_steps: int = 1,
         **kwargs,
     ) -> Optional[Union[List[SamplerOutput], IntermediateTensors]]:
+        logger.info(f"execute model {len(kv_caches), len(kv_caches[0]), intermediate_tensors}")
         if num_steps > 1:
             raise ValueError("num_steps > 1 is not supported in ModelRunner")
 
@@ -1808,7 +1815,7 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
                     model_input,
                     kv_caches=kv_caches
                 )
-
+            logger.info(f"T1 {hidden_or_intermediate_states}")
         multi_modal_kwargs = model_input.multi_modal_kwargs or {}
         seqlen_agnostic_kwargs = {
             "finished_requests_ids": model_input.finished_requests_ids,
@@ -1835,6 +1842,7 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
                     **seqlen_agnostic_kwargs,
                     **model_kwargs,
                 )
+                logger.info(f"T2 {hidden_or_intermediate_states.shape}")
 
         if (self.observability_config is not None
                 and self.observability_config.collect_model_forward_time):

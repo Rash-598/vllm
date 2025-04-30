@@ -1,5 +1,5 @@
 """CacheEngine class for managing the KV cache."""
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 import torch
 
@@ -228,6 +228,9 @@ class CacheEngineVMM:
     def alloc_seqs(self, allocated_block_counts: Dict[int, int]) -> None:
         """Allocate cache handles for the given number of blocks."""
         for buffer_id, num_blocks in allocated_block_counts.items():
+            # logger.info(
+            #     "VMM Alloc: buffer_id: %d, num_blocks: %d",
+            #     buffer_id, num_blocks)
             allocated_blocks = self.allocated_block_counts[buffer_id]
 
             num_blocks -= allocated_blocks
@@ -236,7 +239,53 @@ class CacheEngineVMM:
                 allocated_blocks = self.allocated_block_counts[buffer_id]
                 offset = (start_offset +
                           allocated_blocks * self.block_bytes_size)
-                self.alloc_one_seq(buffer_id, num_blocks, offset)
+                self.alloc_one_seq_blockwise(buffer_id, num_blocks, offset)
+                # logger.info(f"VMM Alloc: buffer_id: {buffer_id}, num_blocks: {num_blocks}, offset: {offset}")
+                # logger.info(f"allocated_block_counts: {len(self.allocated_block_counts)}")
+                # logger.info(
+                #     "VMM Alloc: buffer_id: %d, num_blocks: %d, "
+                #     "allocated_block_counts: %s", buffer_id, num_blocks,
+                #     str(self.allocated_block_counts))
+    
+    def alloc_seqs_with_prefix(self, prefix_block_counts: Dict[int, Tuple[int,int]], allocated_block_counts: Dict[int, int]) -> None:
+        """Allocate cache handles for the given number of blocks."""
+        # Allocate prefix blocks first
+        logger.info(
+            "VMM Alloc with prefix: allocated_block_counts: %s, "
+            "prefix_block_counts: %s", str(allocated_block_counts),
+            str(prefix_block_counts))
+        key_cache_ptr = self.gpu_cache_ptr[0]
+        value_cache_ptr = self.gpu_cache_ptr[1]
+        for buffer_id, prefix_blocks in prefix_block_counts.items():
+            if prefix_blocks is None:
+                continue
+            if self.allocated_block_counts[buffer_id] != 0:
+                blocks = self.allocated_block_counts[buffer_id]
+                self.device_cache_allocator.release_cache_ptr(key_cache_ptr, blocks, buffer_id * self.cache_sapce_bytes_size)
+                self.device_cache_allocator.release_cache_ptr(value_cache_ptr, blocks, buffer_id * self.cache_sapce_bytes_size)
+                self.allocated_block_counts[buffer_id] = 0
+            prefix_buffer_id = prefix_blocks[0]
+            prefix_blocks_count = prefix_blocks[1] + 1
+            self.allocated_block_counts[buffer_id] += prefix_blocks_count
+            for i in range(prefix_blocks_count):
+                prefix_offset = prefix_buffer_id * self.cache_sapce_bytes_size + i * self.block_bytes_size
+                curr_offset = buffer_id * self.cache_sapce_bytes_size + i * self.block_bytes_size
+                self.device_cache_allocator.check_alloc_handle(key_cache_ptr, prefix_offset, curr_offset)
+                self.device_cache_allocator.check_alloc_handle(value_cache_ptr, prefix_offset, curr_offset)
+
+        # Allocate the rest blocks
+        for buffer_id, num_blocks in allocated_block_counts.items():
+            logger.info(
+                "VMM Alloc: buffer_id: %d, num_blocks: %d",
+                buffer_id, num_blocks)
+            allocated_blocks = self.allocated_block_counts[buffer_id]
+            num_blocks -= allocated_blocks
+            start_offset = buffer_id * self.cache_sapce_bytes_size
+            if num_blocks > 0:
+                allocated_blocks = self.allocated_block_counts[buffer_id]
+                offset = (start_offset +
+                          allocated_blocks * self.block_bytes_size)
+                self.alloc_one_seq_blockwise(buffer_id, num_blocks, offset)
                 # logger.info(f"VMM Alloc: buffer_id: {buffer_id}, num_blocks: {num_blocks}, offset: {offset}")
                 # logger.info(f"allocated_block_counts: {len(self.allocated_block_counts)}")
                 # logger.info(
@@ -249,9 +298,12 @@ class CacheEngineVMM:
                       num_blocks: int = 1,
                       offset: int = 0) -> None:
         """Allocate cache handles for the given number of blocks."""
+        logger.info(
+                "VMM Alloc: buffer_id: %d, num_blocks: %d",
+                buffer_id, num_blocks)
         key_cache_ptr = self.gpu_cache_ptr[0]
         value_cache_ptr = self.gpu_cache_ptr[1]
-
+        
         status1 = self.device_cache_allocator.alloc_cache_ptr(
             key_cache_ptr, num_blocks, offset)
         status2 = self.device_cache_allocator.alloc_cache_ptr(
@@ -264,6 +316,36 @@ class CacheEngineVMM:
                                f"status1: {status1}, status2: {status2}")
 
         self.allocated_block_counts[buffer_id] += num_blocks
+    
+    def alloc_one_seq_blockwise(self,
+                      buffer_id: int,
+                      num_blocks: int = 1,
+                      offset: int = 0) -> None:
+        """Allocate cache handles for the given number of blocks."""
+        # logger.info(
+        #         "VMM Alloc: buffer_id: %d, num_blocks: %d",
+        #         buffer_id, num_blocks)
+        key_cache_ptr = self.gpu_cache_ptr[0]
+        value_cache_ptr = self.gpu_cache_ptr[1]
+        for _ in range(num_blocks):
+            status1 = self.device_cache_allocator.alloc_cache_ptr(
+                key_cache_ptr, 1, offset)
+            status2 = self.device_cache_allocator.alloc_cache_ptr(
+                value_cache_ptr, 1, offset)
+            if status1 != 0 or status2 != 0:
+                logger.error(
+                    "VMM Alloc: buffer_id: %d, num_blocks: %d, offset: %d",
+                    buffer_id, num_blocks, offset)
+                raise RuntimeError(f"Failed to allocate cache handles. "
+                                f"status1: {status1}, status2: {status2}")
+            offset += self.block_bytes_size
+
+        self.allocated_block_counts[buffer_id] += num_blocks
+        # offset2 = 10* self.cache_sapce_bytes_size + self.block_bytes_size
+        # self.device_cache_allocator.check_alloc_handle(
+        #     self.gpu_cache_ptr[0], 0, offset2)
+        # self.device_cache_allocator.release_cache_ptr(
+        #     self.gpu_cache_ptr[0], 1, offset2)
 
     def free_seqs(self, free_buffer_ids: List[int]) -> None:
         """Free cache handles for the given buffer ids."""

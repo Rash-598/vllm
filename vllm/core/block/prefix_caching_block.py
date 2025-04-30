@@ -722,7 +722,266 @@ class PrefixCachingBlockAllocator(BlockAllocator):
                            key=lambda x: not _block_is_cached(x))
         return block_hashes[:idx]
 
+BufferBlockId = int
+BufferId = int
+VirtualBlockLocation = Tuple[BufferId, BufferBlockId]
 
+class PrefixCachingBufferAllocator(BlockAllocator):
+    def __init__(self, num_blocks: int, block_size: int):
+        self._block_size = block_size
+        self._num_blocks = num_blocks
+        self._cached_blocks: Dict[PrefixHash, VirtualBlockLocation] = {}
+        self._filled_VMBlockIds: Dict[BufferId, BufferBlockId] = {}
+        self._touched_blocks: Set[VirtualBlockLocation] = set()
+
+    def allocate_mutable_block(self, prev_block: Optional[Block],
+                               buffer_id: int,
+                               device: Optional[Device] = None,
+                               extra_hash: Optional[int] = None) -> Block:
+        """Allocates a mutable block. If there are no free blocks, this will
+        evict unused cached blocks.
+
+        Args:
+            prev_block (Block): The previous block in the sequence.
+                None is not allowed unlike it is super class.
+
+        Returns:
+            Block: The allocated mutable block.
+        """
+        assert device is None
+        assert_prefix_caching_block_or_none(prev_block)
+        block_id = None
+        if buffer_id in self._filled_VMBlockIds:
+            block_id = self._filled_VMBlockIds[buffer_id] + 1
+        else:
+            block_id = 0   
+        block = PrefixCachingBlock(
+            prev_block=prev_block,
+            token_ids=[],
+            block_size=self._block_size,
+            vm_block_id=(buffer_id, block_id),
+            allocator=self,
+            computed=False,
+            extra_hash=extra_hash,
+        )
+        assert not block.computed
+        assert block.content_hash is None
+        return block
+
+    def allocate_immutable_block(self, prev_block: Optional[Block],
+                                 token_ids: List[int],
+                                 buffer_id: int,
+                                 extra_hash: Optional[int],
+                                 device: Optional[Device] = None) -> Block:
+        """Allocates an immutable block with the given token IDs, reusing cached
+        blocks if possible.
+
+        Args:
+            prev_block (Optional[Block]): The previous block in the sequence.
+            token_ids (List[int]): The token IDs to be stored in the block.
+
+        Returns:
+            Block: The allocated immutable block.
+        """
+        assert device is None
+        assert_prefix_caching_block_or_none(prev_block)
+
+        # First, try to create a block that points to cached data
+        block = PrefixCachingBlock(
+            prev_block=prev_block,
+            token_ids=token_ids,
+            block_size=self._block_size,
+            vm_block_id=None,
+            allocator=self,
+            computed=False,
+            extra_hash=extra_hash,
+        )
+        
+        assert block.content_hash is not None
+
+        vm_block_id = self._cached_blocks.get(block.content_hash, None)
+        if vm_block_id is not None:
+            self._filled_VMBlockIds[buffer_id] = vm_block_id[1]
+            block.vm_block_id = vm_block_id
+            return block
+
+        # No cached block => Allocate a new block
+        block = self.allocate_mutable_block(prev_block, buffer_id)
+        block.append_token_ids(token_ids)
+        return block
+
+    def allocate_immutable_blocks(self, prev_block: Optional[Block],
+                                  buffer_id: int,
+                                  block_token_ids: List[List[int]],
+                                  extra_hash: Optional[int],
+                                  device: Optional[Device] = None) -> List[Block]:
+        blocks = []
+        logger.info(f"Allocating immutable blocks with buffer_id: {buffer_id}, cached_blocks: {self._cached_blocks}")
+        # logger.info(f"Reached here with block_token_ids: {block_token_ids}")
+        for token_ids in block_token_ids:
+            prev_block = self.allocate_immutable_block(prev_block=prev_block,
+                                                       buffer_id=buffer_id,
+                                                       token_ids=token_ids,
+                                                       device=device,
+                                                       extra_hash=extra_hash)
+            blocks.append(prev_block)
+        return blocks
+
+    def free(self, block: Block) -> None:
+        pass
+
+    def fork(self, last_block: Block) -> List[Block]:
+        pass
+
+    def get_num_total_blocks(self) -> int:
+        pass
+
+    def get_num_free_blocks(self) -> int:
+        pass
+
+    def get_physical_block_id(self, absolute_id: int) -> int:
+        pass
+
+    def swap_out(self, blocks: List[Block]) -> None:
+        pass
+
+    def swap_in(self, blocks: List[Block]) -> None:
+        pass
+
+    @property
+    def all_block_ids(self) -> FrozenSet[int]:
+        return frozenset()
+
+    def clear_copy_on_writes(self) -> List[Tuple[int, int]]:
+        pass
+
+    def mark_blocks_as_accessed(self, block_ids: List[int],
+                                now: float) -> None:
+        pass
+
+    def mark_blocks_as_computed(self, block_ids: List[int]) -> None:
+        # Mark all touched blocks as computed.
+        pass
+
+    def get_common_computed_block_ids(
+            self, computed_seq_block_ids: List[List[int]]) -> List[int]:
+        pass
+
+    def cow_block_if_not_appendable(self, block: Block) -> BlockId:
+        """NOTE: This should not be used besides Block"""
+        pass
+
+    def promote_to_immutable_block(self, block: Block) -> BlockId:
+        """Once a mutable block is full, it can be promoted to an immutable
+        block. This means that its content can be referenced by future blocks
+        having the same prefix.
+
+        Note that if we already have a cached block with the same content, we
+        will replace the newly-promoted block's mapping with the existing cached
+        block id.
+
+        Args:
+            block: The mutable block to be promoted.
+
+        Returns:
+            BlockId: Either the original block index, or the block index of
+                the previously cached block matching the same content.
+        """
+        # Ensure block can be promoted
+        assert block.content_hash is not None
+        assert block.vm_block_id is not None
+
+        self._filled_VMBlockIds[block.vm_block_id[0]] = block.vm_block_id[1]
+        if block.content_hash not in self._cached_blocks:
+            # No cached content hash => Set this block as cached.
+            # Note that this block cannot be marked as computed yet
+            # because other sequences in the same batch cannot reuse
+            # this block.
+            self._cached_blocks[block.content_hash] = block.vm_block_id
+            # Mark this block as touched so that it can be marked as
+            # computed after the entire batch of sequences are scheduled.
+            # self._touched_blocks.add(block.vm_block_id)
+            return block.vm_block_id
+
+        # Reuse the cached content hash
+        block.vm_block_id = self._cached_blocks[block.content_hash]
+
+        return block.vm_block_id
+
+    def get_num_full_blocks_touched(self, blocks: List[Block]) -> int:
+        pass
+
+    def get_prefix_cache_hit_rate(self) -> float:
+        """Prefix cache hit rate. -1 means not supported or disabled."""
+        pass
+
+    def reset_prefix_cache(self) -> bool:
+        """Reset prefix cache."""
+        pass
+
+    def find_cached_blocks_prefix(self, block_hashes: List[int]) -> List[int]:
+        """
+        Given a list of block hashes, return the prefix of the block hashes that
+        are all cached.
+
+        Since a block's block hash includes the hashes of all previous blocks,
+        and we only allocate/deallocate blocks in the entire sequence, so if a
+        block is cached, then all previous blocks are also cached. With this
+        property, we can use binary search to find the prefix of cached blocks.
+
+        Args:
+            block_hashes (List[int]): The list of block hashes.
+
+        Returns:
+            List[int]: The prefix of the `block_hashes` that are cached.
+        """
+
+        def _block_is_cached(block_hash: PrefixHash) -> bool:
+            if block_hash not in self._cached_blocks:
+                return False
+
+            # cached_block_id = self._cached_blocks[block_hash]
+            # # We only consider the blocks that are marked as computed.
+            return True
+
+        def _bisect_left(a, x, key: Callable[[PrefixHash], bool]) -> int:
+
+            # python <= 3.10 don't have the key argument
+            if sys.version_info < (3, 10):
+                a = [key(e) for e in a]
+                return bisect_left(a, x)
+            else:
+                return bisect_left(a, x, key=key)
+
+        # Look for the first block that's not cached, and returns the prefix
+        # i.e. blocks that are cached.
+        idx = _bisect_left(block_hashes,
+                           True,
+                           key=lambda x: not _block_is_cached(x))
+        return block_hashes[:idx]
+
+    # def allocate(self, seq: Sequence) -> VirtualBlockLocation:
+    #     """Allocate a block ID to a buffer ID."""
+    #     buffer_id = seq.cache_buffer_id
+    #     if buffer_id not in self._cached_blocks:
+    #         block_id = self._allocate_buffer_block_id(buffer_id)
+    #         self._cached_blocks[buffer_id] = (buffer_id, block_id)
+    #         return (buffer_id, block_id)
+    #     else:
+    #         return self._cached_blocks[buffer_id]
+        
+    # def _allocate_buffer_block_id(
+    #     self,
+    #     buffer_id: int,
+    # ) -> BufferBlockId:
+    #     """Allocate a block ID to a buffer ID."""
+    #     if buffer_id not in self._filled_VMBlockIds:
+    #         self._filled_VMBlockIds[buffer_id] = [0]
+    #         return 0
+    #     prev_block_id = self._filled_VMBlockIds[buffer_id][-1]
+    #     self._filled_VMBlockIds[buffer_id].append(prev_block_id + 1)
+    #     return prev_block_id + 1
+    
 class PrefixCachingBlock(Block):
     """A block implementation that supports prefix caching.
 
@@ -760,13 +1019,14 @@ class PrefixCachingBlock(Block):
         block_size: int,
         allocator: BlockAllocator,
         block_id: Optional[int] = None,
+        vm_block_id: Optional[Tuple[int, int]] = None,
         computed: bool = False,
         extra_hash: Optional[int] = None,
     ):
-        assert isinstance(allocator, PrefixCachingBlockAllocator), (
-            "Currently this class is only tested with "
-            "PrefixCachingBlockAllocator. Got instead allocator = {}".format(
-                allocator))
+        # assert isinstance(allocator, PrefixCachingBlockAllocator), (
+        #     "Currently this class is only tested with "
+        #     "PrefixCachingBlockAllocator. Got instead allocator = {}".format(
+        #         allocator))
         assert_prefix_caching_block_or_none(prev_block)
 
         self._prev_block = prev_block
@@ -785,12 +1045,14 @@ class PrefixCachingBlock(Block):
                 token_ids=token_ids,
                 block_size=block_size,
                 block_id=block_id,
+                vm_block_id=vm_block_id,
                 allocator=self._allocator)
         else:
             self._block = NaiveBlock(prev_block=prev_block,
                                      token_ids=token_ids,
                                      block_size=block_size,
                                      block_id=block_id,
+                                     vm_block_id=vm_block_id,
                                      allocator=self._allocator)
 
         self._update_num_tokens_total()
@@ -860,6 +1122,14 @@ class PrefixCachingBlock(Block):
     @block_id.setter
     def block_id(self, value) -> None:
         self._block.block_id = value
+
+    @property
+    def vm_block_id(self) -> Optional[Tuple[int, int]]:
+        return self._block.vm_block_id
+
+    @vm_block_id.setter
+    def vm_block_id(self, value) -> None:
+        self._block.vm_block_id = value
 
     @property
     def is_full(self) -> bool:
@@ -1001,6 +1271,16 @@ class ComputedBlocksTracker:
 
     def _update_seq_hashes(self, seq: Sequence) -> None:
         """Incrementally update the sequence's block hashes and record them."""
+        import inspect
+        stack = inspect.stack()
+        if len(stack) > 1:
+            caller = stack[1]
+            filename = caller.filename
+            line_number = caller.lineno
+            function_name = caller.function
+            logger.info(
+                f"{function_name} "
+                f"({filename}:{line_number})")
         assert self._enable_caching
 
         block_hashes_recorded = self._seq_id_to_blocks_hashes.get(
@@ -1023,6 +1303,7 @@ class ComputedBlocksTracker:
         prev_block_hash = (self._none_hash if cur_num_blocks_recorded == 0 else
                            block_hashes_recorded[-1])
         # Only update the computed block hashes for the new blocks
+        # logger.info(f"update_sqe_hashes {seq.seq_id} {num_computed_blocks} {block_hashes_recorded} {len(seq.get_token_ids())} {seq.get_token_ids()}")
         for i in range(cur_num_blocks_recorded, num_computed_blocks):
             assert len(token_ids) >= (i + 1) * self._block_size
             block_token_ids = token_ids[i * self._block_size:(i + 1) *
@@ -1046,6 +1327,16 @@ class ComputedBlocksTracker:
         self._seq_id_to_blocks_hashes[seq.seq_id] = block_hashes_recorded
 
     def get_num_cached_tokens(self, seq: Sequence) -> int:
+        import inspect
+        stack = inspect.stack()
+        if len(stack) > 1:
+            caller = stack[1]
+            filename = caller.filename
+            line_number = caller.lineno
+            function_name = caller.function
+            logger.info(
+                f"{function_name} "
+                f"({filename}:{line_number})")
         if not self._enable_caching:
             return 0
 

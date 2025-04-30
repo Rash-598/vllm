@@ -532,11 +532,11 @@ if __name__ == "__main__":
                         help="Path to the dataset")
     parser.add_argument("--input-len",
                         type=int,
-                        default=None,
+                        default=1024,
                         help="Input prompt length for each request")
     parser.add_argument("--output-len",
                         type=int,
-                        default=None,
+                        default=2,
                         help="Output length for each request. Overrides the "
                         "output length from the dataset.")
     parser.add_argument("--n",

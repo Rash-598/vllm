@@ -8,6 +8,7 @@ from vllm.utils import Device
 BlockId = int
 
 
+
 class Block(ABC):
 
     @abstractmethod
@@ -24,6 +25,17 @@ class Block(ABC):
     def block_id(self, value: Optional[int]) -> None:
         """NOTE: Do not use this API outside Block."""
         self._block_id = value
+    
+    @property
+    @abstractmethod
+    def vm_block_id(self) -> Optional[Tuple[int, int]]:
+        pass
+
+    @vm_block_id.setter
+    @abstractmethod
+    def vm_block_id(self, value: Optional[Tuple[int, int]]) -> None:
+        """NOTE: Do not use this API outside Block."""
+        self._vm_block_id = value
 
     @property
     @abstractmethod

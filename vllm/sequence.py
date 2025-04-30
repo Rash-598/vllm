@@ -1339,6 +1339,7 @@ class ExecuteModelRequest(
     # Async callback
     async_callback: Optional[Callable] = None
     # new add for vmm
+    prefix_block_counts: dict[int, tuple[int, int]] = msgspec.field(default_factory=dict)
     allocated_block_counts: dict[int, int] = msgspec.field(default_factory=dict)
     free_buffer_ids: list[int] = msgspec.field(default_factory=list)
 

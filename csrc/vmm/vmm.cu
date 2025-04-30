@@ -121,6 +121,70 @@ int64_t CacheAllocator::allocCachePtr(
   return status;
 }
 
+void CacheAllocator::checkAllocHandle(const c10::intrusive_ptr<CacheDevicePtr>& ptr, int64_t offset, int64_t offset2) {
+  auto ptr_dptr = ptr->dptr + offset;
+  void* ptr_void = reinterpret_cast<void*>(ptr_dptr);
+  CUresult status = CUDA_SUCCESS;
+  CUmemGenericAllocationHandle allocationHandle;
+  status = cuMemRetainAllocationHandle(&allocationHandle, ptr_void);
+  if (status != CUDA_SUCCESS) {
+    printf("cuMemRetainAllocationHandle failed! error-code: %d\n", status);
+  } else {
+    printf("cuMemRetainAllocationHandle success! handle: %ld\n", allocationHandle);
+  }
+  auto ptr_dptr2 = ptr->dptr + offset2;
+  size_t size = 1 * pageSize;
+  status = cuMemMap(ptr_dptr2, size, 0, allocationHandle, 0);
+  if (status != CUDA_SUCCESS) {
+    printf("cuMemMap failed! error-code: %d\n", status);
+  } else {
+    printf("cuMemMap success! handle: %ld\n", allocationHandle);
+  }
+  status = cuMemSetAccess(ptr_dptr2, size, &accessDescr, 1);
+  if (status != CUDA_SUCCESS) {
+    printf("cuMemSetAccess failed! error-code: %d\n", status);
+  } else {
+    printf("cuMemSetAccess success! handle: %ld\n", allocationHandle);
+  }
+  status = cuMemRelease(allocationHandle);
+}
+// // alloc function, allocate physical memory, map to the reserved virtual address
+// // space of dptr, and set access permission
+// int64_t CacheAllocator::allocPrefixCachePtr(
+//   const c10::intrusive_ptr<CacheDevicePtr>& ptr, int64_t pageNum, int64_t prefixOffset,
+//   int64_t offset) {
+//   // printf("allocCachePtr, pageNum: %ld, offset: %ld\n", pageNum, offset);
+//   if (pageNum == 0) {
+//     return CUDA_SUCCESS;
+//   }
+//   size_t size = pageNum * pageSize;
+//   auto start_dptr = ptr->dptr + offset;
+
+//   CUresult status = CUDA_SUCCESS;
+//   CUmemGenericAllocationHandle allocationHandle;
+//   if ((status = cuMemCreate(&allocationHandle, size, &prop, 0)) ==
+//       CUDA_SUCCESS) {
+//     if ((status = cuMemMap(start_dptr, size, 0, allocationHandle, 0)) ==
+//         CUDA_SUCCESS) {
+//       if ((status = cuMemSetAccess(start_dptr, size, &accessDescr, 1)) ==
+//           CUDA_SUCCESS) {
+//         ptr->allocatedPageNum += pageNum;
+//       } else {
+//         printf("cuMemMap success,but cuMemSetAccess failed!, err code: %d\n",
+//               status);
+//         cuMemUnmap(start_dptr, size);
+//       }
+//     }
+//     // always release the handle, but the memory is still can access util
+//     // cuMemUnmap
+//     // printf("Offset: %ld, Allocated page num: %ld\n", start_dptr, ptr->allocatedPageNum);
+//     cuMemRelease(allocationHandle);
+//   } else {
+//     printf("cuMemCreate failed!, err code: %d\n", status);
+//   }
+//   return status;
+// }
+
 // free function, unmap the virtual address space，release physical memory
 // handles and free virtual address space
 int64_t CacheAllocator::freeCachePtr(

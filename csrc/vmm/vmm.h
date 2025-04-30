@@ -70,6 +70,9 @@ class CacheAllocator : public torch::CustomClassHolder {
   int64_t allocCachePtr(const c10::intrusive_ptr<CacheDevicePtr>& ptr,
                         int64_t pageNum = 1, int64_t offset = 0);
 
+  void checkAllocHandle(const c10::intrusive_ptr<CacheDevicePtr>& ptr, 
+                        int64_t offset, int64_t offset2);
+
   // free function, unmap the virtual address space，release physical memory
   // handles and free virtual address space
   int64_t freeCachePtr(const c10::intrusive_ptr<CacheDevicePtr>& ptr);

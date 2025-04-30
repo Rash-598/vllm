@@ -32,7 +32,7 @@ generating_prompts = [prefix + prompt for prompt in prompts]
 sampling_params = SamplingParams(temperature=0.0)
 
 # Create an LLM without prefix caching as a baseline.
-regular_llm = LLM(model="facebook/opt-125m", gpu_memory_utilization=0.4)
+regular_llm = LLM(model="meta-llama/Meta-Llama-3-8B", gpu_memory_utilization=0.4)
 
 print("Results without `enable_prefix_caching`")
 
@@ -55,12 +55,16 @@ del regular_llm
 cleanup_dist_env_and_memory()
 
 # Create an LLM with prefix caching enabled.
-prefix_cached_llm = LLM(model="facebook/opt-125m",
+prefix_cached_llm = LLM(model="meta-llama/Meta-Llama-3-8B",
                         enable_prefix_caching=True,
-                        gpu_memory_utilization=0.4)
+                        gpu_memory_utilization=0.9)
 
 # Warmup so that the shared prompt's KV cache is computed.
-prefix_cached_llm.generate(generating_prompts[0], sampling_params)
+outputs = prefix_cached_llm.generate(generating_prompts[0], sampling_params)
+for output in outputs:
+    prompt = output.prompt
+    generated_text = output.outputs[0].text
+    print(f"Prompt: {prompt!r}, Generated text: {generated_text!r}")
 
 # Generate with prefix caching.
 outputs = prefix_cached_llm.generate(generating_prompts, sampling_params)

@@ -1355,6 +1355,7 @@ class LLMEngine:
             >>>     if not (engine.has_unfinished_requests() or example_inputs):
             >>>         break
         """
+        logger.info("LLM Engine step")
         if self.parallel_config.pipeline_parallel_size > 1:
             raise NotImplementedError(
                 "Pipeline parallelism is only supported through AsyncLLMEngine "
@@ -1445,6 +1446,9 @@ class LLMEngine:
 
             try:
                 if self.use_vmm:
+                    logger.info(f"Allocating {len(scheduler_outputs.allocated_block_counts)} Free Buffers {len(scheduler_outputs.free_buffer_ids)}")
+                    execute_model_req.prefix_block_counts = \
+                        scheduler_outputs.prefix_block_counts
                     execute_model_req.allocated_block_counts = \
                         scheduler_outputs.allocated_block_counts
                     execute_model_req.free_buffer_ids = \

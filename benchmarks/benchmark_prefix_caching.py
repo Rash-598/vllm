@@ -49,7 +49,7 @@ PROMPT = "You are a helpful assistant in recognizes the content of tables in mar
 
 def test_prefix(llm=None, sampling_params=None, prompts=None):
     start_time = time.time()
-
+    llm.generate(prompts[0], sampling_params=sampling_params)
     llm.generate(prompts, sampling_params=sampling_params)
 
     end_time = time.time()
